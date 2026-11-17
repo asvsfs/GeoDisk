@@ -10,37 +10,42 @@ export interface MassBody {
   label?: string;
   x: number;
   y: number;
+  /** 3D spatial z-coordinate in world units (0 = equatorial shadow plane) */
+  z?: number;
   /** Velocity in world units / s when N-body dynamics are active */
   vx?: number;
   vy?: number;
+  vz?: number;
   /** If true, this body exerts gravity but does not move */
   pinned?: boolean;
-  /** Gravitational strength G2 * M in world^2 / s^2 units */
+  /** 3D gravitational parameter G * M in world^3 / s^2 units */
   mu: number;
   /** Core softening radius in world units */
   softening: number;
   /** Physical / event-horizon collision radius */
   radius: number;
-  /** 2+1D spin parameter J (creates gravitomagnetic frame-dragging Bz) */
+  /** 3D axial spin parameter Jz (creates 3D Lense-Thirring gravitomagnetic dipole B) */
   spin: number;
   kind: MassKind;
   /** Optional kinematic orbital motion around anchor */
   orbit?: {
     centerX: number;
     centerY: number;
+    centerZ?: number;
     orbitRadius: number;
     angularSpeed: number;
     phase: number;
+    zAmplitude?: number;
   };
 }
 
 export interface UniformGridConfig {
   cols: number;
   rows: number;
+  layers: number;
   worldWidth: number;
   worldHeight: number;
-  /** Reference outer radius for 2D logarithmic potential normalization */
-  potentialRefRadius: number;
+  worldDepth: number;
   /** Effective speed of light c in world units / s */
   speedOfLight: number;
 }
@@ -48,6 +53,7 @@ export interface UniformGridConfig {
 export interface UniverseConfig {
   universeWidth: number;
   universeHeight: number;
+  universeDepth: number;
   /** Field strength |g| below which an offscreen outward object is considered escaped */
   escapeFieldThreshold: number;
   /** Minimum distance from barycenter (outside screen) before field-escape destruction applies */
@@ -55,45 +61,49 @@ export interface UniverseConfig {
 }
 
 /**
- * Sampled gravity field values at a continuous (x, y) world point,
- * bilinearly interpolated from the uniform grid.
+ * Sampled 3D gravity field values at a continuous (x, y, z) world point,
+ * trilinearly interpolated from the 3D uniform grid.
  */
 export interface GravityFieldSample {
-  /** Summed 2D gravitational potential Phi(x, y) <= 0 */
+  /** Summed 3D gravitational potential Phi(x, y, z) <= 0 */
   phi: number;
-  /** Summed 2D gravitational field x-component (-dPhi/dx) */
+  /** Summed 3D gravitational field components (-grad Phi) */
   gx: number;
-  /** Summed 2D gravitational field y-component (-dPhi/dy) */
   gy: number;
-  /** Summed 2+1D gravitomagnetic frame-dragging curl Bz(x, y) */
+  gz: number;
+  /** Summed 3D gravitomagnetic Lense-Thirring frame-dragging field B(x, y, z) */
+  bx: number;
+  by: number;
   bz: number;
   /** Gravitational time dilation lapse alpha = sqrt(max(alphaMin^2, 1 + 2*phi/c^2)) */
   lapse: number;
 }
 
 /**
- * Interface that any Gravity Field solver (WebGPU compute or CPU grid)
+ * Interface that any 3D Gravity Field solver (WebGPU compute or CPU grid)
  * exposes to the Rocket Physics module.
  */
 export interface GravityFieldSampler {
   readonly config: UniformGridConfig;
-  /** Sample the uniform grid at world position (x, y) */
-  sampleAt(x: number, y: number): GravityFieldSample;
+  /** Sample the 3D uniform grid at world position (x, y, z) */
+  sampleAt(x: number, y: number, z?: number): GravityFieldSample;
 }
 
 export interface GravityGridSolver extends GravityFieldSampler {
-  /** Raw packed Float32Array [phi, gx, gy, bz] per cell (length = cols * rows * 4) */
+  /** Raw packed Float32Array [phi, gx, gy, gz, bx, by, bz, 0] per 3D cell */
   readonly buffer: Float32Array;
-  /** Recompute every cell of the uniform grid as the sum over all masses */
+  /** Recompute every cell of the 3D uniform grid as the sum over all masses */
   computeGrid(masses: readonly MassBody[]): void;
 }
 
 export interface RocketState {
   x: number;
   y: number;
+  z: number;
   vx: number;
   vy: number;
-  /** Orientation angle in radians */
+  vz: number;
+  /** Orientation angle in radians (projected steering plane) */
   angle: number;
   /** Remaining propellant mass in kg-equivalent units */
   fuel: number;
@@ -102,11 +112,11 @@ export interface RocketState {
   dryMass: number;
   /** Coordinate elapsed time t (seconds) */
   coordTime: number;
-  /** Rocket proper elapsed time tau (seconds, dilated by gravity & speed) */
+  /** Rocket proper elapsed time tau (seconds, dilated by gravity & 3D speed) */
   properTime: number;
   /** Last sampled gravitational lapse factor (0..1) */
   lastLapse: number;
-  /** Peak coordinate speed reached during flight */
+  /** Peak 3D coordinate speed reached during flight */
   peakSpeed: number;
   /** Minimum gravitational lapse encountered */
   minLapse: number;
@@ -134,7 +144,7 @@ export interface RocketConfig {
 
 /**
  * Replaceable Rocket Physics module contract.
- * Completely independent of how the gravity grid is computed or rendered.
+ * Completely independent of how the 3D gravity grid is computed or shadow-rendered.
  */
 export interface RocketPhysicsModel {
   readonly id: string;
@@ -152,6 +162,7 @@ export interface RocketPhysicsModel {
 export interface TrajectoryPoint {
   x: number;
   y: number;
+  z: number;
   lapse: number;
   speed: number;
 }

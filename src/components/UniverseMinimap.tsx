@@ -1,4 +1,4 @@
-import type { RefObject } from 'react';
+import { useRef, type PointerEvent, type RefObject } from 'react';
 import type {
   FlightPhase,
   MassBody,
@@ -28,6 +28,10 @@ export interface MinimapRenderState {
   viewHeight: number;
   universeWidth: number;
   universeHeight: number;
+  camX: number;
+  camY: number;
+  camViewWidth: number;
+  camViewHeight: number;
   destroyFlashes: readonly MinimapDestroyFlash[];
 }
 
@@ -67,16 +71,27 @@ export function renderUniverseMinimap(
   ctx.strokeRect(1.5, 1.5, cssW - 3, cssH - 3);
   ctx.restore();
 
-  // Main screen viewport rectangle inside the wider universe
-  const vw = state.viewWidth * scale;
-  const vh = state.viewHeight * scale;
-  const vx = cx - vw * 0.5;
-  const vy = cy - vh * 0.5;
-  ctx.fillStyle = 'rgba(56, 189, 248, 0.04)';
-  ctx.fillRect(vx, vy, vw, vh);
-  ctx.strokeStyle = 'rgba(56, 189, 248, 0.42)';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(vx, vy, vw, vh);
+  // Core uniform grid frame (1600 x 1000)
+  {
+    const gw = state.viewWidth * scale;
+    const gh = state.viewHeight * scale;
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.18)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(cx - gw * 0.5, cy - gh * 0.5, gw, gh);
+  }
+
+  // Live Camera Viewport Rectangle (tracks pan & zoom across the universe)
+  {
+    const cw = state.camViewWidth * scale;
+    const ch = state.camViewHeight * scale;
+    const camLeft = toMapX(state.camX) - cw * 0.5;
+    const camTop = toMapY(state.camY) - ch * 0.5;
+    ctx.fillStyle = 'rgba(34, 211, 238, 0.06)';
+    ctx.fillRect(camLeft, camTop, cw, ch);
+    ctx.strokeStyle = 'rgba(34, 211, 238, 0.72)';
+    ctx.lineWidth = 1.25;
+    ctx.strokeRect(camLeft, camTop, cw, ch);
+  }
 
   // Predicted trajectory across universe
   if (state.predictedTrajectory.length > 1) {
@@ -199,8 +214,8 @@ export function renderUniverseMinimap(
     const rx = toMapX(state.rocket.x);
     const ry = toMapY(state.rocket.y);
     const isOffscreen =
-      Math.abs(state.rocket.x) > state.viewWidth * 0.5 ||
-      Math.abs(state.rocket.y) > state.viewHeight * 0.5;
+      Math.abs(state.rocket.x - state.camX) > state.camViewWidth * 0.5 ||
+      Math.abs(state.rocket.y - state.camY) > state.camViewHeight * 0.5;
     const ang = state.phase === 'aiming' ? state.aimAngle : state.rocket.angle;
 
     if (isOffscreen) {
@@ -230,6 +245,17 @@ interface UniverseMinimapProps {
   rocketOffscreen: boolean;
   offscreenMassCount: number;
   escapedCount: number;
+  universeWidth: number;
+  universeHeight: number;
+  zoom: number;
+  cameraTool: 'aim' | 'pan';
+  followRocket: boolean;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onResetCamera: () => void;
+  onToggleCameraTool: () => void;
+  onToggleFollowRocket: () => void;
+  onPanToWorld: (wx: number, wy: number) => void;
 }
 
 export function UniverseMinimap({
@@ -237,7 +263,20 @@ export function UniverseMinimap({
   rocketOffscreen,
   offscreenMassCount,
   escapedCount,
+  universeWidth,
+  universeHeight,
+  zoom,
+  cameraTool,
+  followRocket,
+  onZoomIn,
+  onZoomOut,
+  onResetCamera,
+  onToggleCameraTool,
+  onToggleFollowRocket,
+  onPanToWorld,
 }: UniverseMinimapProps) {
+  const draggingRef = useRef(false);
+
   let statusText = 'In View';
   let statusTone = 'text-slate-400';
 
@@ -248,6 +287,14 @@ export function UniverseMinimap({
     statusText = `${offscreenMassCount} Offscreen`;
     statusTone = 'text-cyan-300';
   }
+
+  const panFromPointer = (e: PointerEvent<HTMLCanvasElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const nx = (e.clientX - rect.left) / rect.width - 0.5;
+    const ny = (e.clientY - rect.top) / rect.height - 0.5;
+    onPanToWorld(nx * universeWidth, ny * universeHeight);
+  };
 
   return (
     <section
@@ -269,12 +316,125 @@ export function UniverseMinimap({
 
       <canvas
         ref={canvasRef}
-        width={216}
-        height={135}
+        width={232}
+        height={145}
         data-testid="universe-minimap"
-        aria-label="Universe tactical minimap showing viewport, stars, rocket, and gravitational boundary"
-        className="w-[176px] h-[110px] sm:w-[216px] sm:h-[135px] block rounded bg-[#05080E] border border-slate-800/80"
+        aria-label="Universe tactical minimap showing viewport, stars, rocket, and gravitational boundary. Click or drag to move camera."
+        onPointerDown={(e) => {
+          draggingRef.current = true;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          panFromPointer(e);
+        }}
+        onPointerMove={(e) => {
+          if (draggingRef.current) {
+            panFromPointer(e);
+          }
+        }}
+        onPointerUp={(e) => {
+          draggingRef.current = false;
+          if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+            e.currentTarget.releasePointerCapture(e.pointerId);
+          }
+        }}
+        onPointerCancel={() => {
+          draggingRef.current = false;
+        }}
+        className="w-[184px] h-[115px] sm:w-[232px] sm:h-[145px] block rounded bg-[#05080E] border border-slate-800/80 cursor-crosshair touch-none"
       />
+
+      {/* Camera Zoom & Map Navigation Controls */}
+      <div
+        role="group"
+        aria-label="Map camera controls"
+        className="flex items-center justify-between gap-1 pt-0.5"
+      >
+        <div className="flex items-center gap-0.5 bg-[#070A10] border border-slate-800 rounded p-0.5">
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label="Zoom out"
+            title="Zoom Out (-)"
+            onClick={(e) => {
+              onZoomOut();
+              e.currentTarget.blur();
+            }}
+            className="w-6 h-6 flex items-center justify-center rounded text-xs font-mono text-slate-300 hover:bg-slate-800 hover:text-white cursor-pointer"
+          >
+            -
+          </button>
+          <span
+            aria-label="Camera zoom level"
+            className="px-1 text-[10px] font-mono text-slate-300 tabular-nums w-9 text-center"
+          >
+            {Math.round(zoom * 100)}%
+          </span>
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label="Zoom in"
+            title="Zoom In (+)"
+            onClick={(e) => {
+              onZoomIn();
+              e.currentTarget.blur();
+            }}
+            className="w-6 h-6 flex items-center justify-center rounded text-xs font-mono text-slate-300 hover:bg-slate-800 hover:text-white cursor-pointer"
+          >
+            +
+          </button>
+        </div>
+
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-pressed={cameraTool === 'pan'}
+            title="Toggle Pan Map tool (V) · Or right-drag / Shift+drag anywhere"
+            onClick={(e) => {
+              onToggleCameraTool();
+              e.currentTarget.blur();
+            }}
+            className={`px-2 h-7 text-[11px] font-medium rounded border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              cameraTool === 'pan'
+                ? 'bg-slate-800 border-cyan-500/60 text-cyan-300'
+                : 'bg-[#070A10] border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            Pan
+          </button>
+
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-pressed={followRocket}
+            title="Follow rocket (C)"
+            onClick={(e) => {
+              onToggleFollowRocket();
+              e.currentTarget.blur();
+            }}
+            className={`px-2 h-7 text-[11px] font-medium rounded border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              followRocket
+                ? 'bg-slate-800 border-emerald-500/60 text-emerald-300'
+                : 'bg-[#070A10] border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            Follow
+          </button>
+
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label="Reset camera view"
+            title="Reset View (0)"
+            onClick={(e) => {
+              onResetCamera();
+              e.currentTarget.blur();
+            }}
+            className="px-2 h-7 text-[11px] font-medium rounded border bg-[#070A10] border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            Reset
+          </button>
+        </div>
+      </div>
     </section>
   );
 }

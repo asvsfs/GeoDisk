@@ -1,4 +1,4 @@
-import type { CpuGravityGridSolver } from '../physics/gravityField';
+import { UNIVERSE_CONFIG, type CpuGravityGridSolver } from '../physics/gravityField';
 import type {
   FieldViewMode,
   FlightPhase,
@@ -9,27 +9,89 @@ import type {
   WaypointBeacon,
 } from '../physics/types';
 
+export const CAMERA_LIMITS = {
+  minZoom: 0.26,
+  maxZoom: 2.5,
+  defaultZoom: 1,
+} as const;
+
+export interface CameraState {
+  camX: number;
+  camY: number;
+  zoom: number;
+}
+
 export interface ViewportTransform {
   scale: number;
   offsetX: number;
   offsetY: number;
   cssWidth: number;
   cssHeight: number;
+  camX: number;
+  camY: number;
+  zoom: number;
+}
+
+export function clampCamera(
+  camX: number,
+  camY: number,
+  zoom: number,
+  universeWidth = UNIVERSE_CONFIG.universeWidth,
+  universeHeight = UNIVERSE_CONFIG.universeHeight
+): CameraState {
+  const clampedZoom = Math.max(CAMERA_LIMITS.minZoom, Math.min(CAMERA_LIMITS.maxZoom, zoom));
+  const maxX = universeWidth * 0.5;
+  const maxY = universeHeight * 0.5;
+  return {
+    camX: Math.max(-maxX, Math.min(maxX, camX)),
+    camY: Math.max(-maxY, Math.min(maxY, camY)),
+    zoom: clampedZoom,
+  };
+}
+
+export function zoomCameraAroundPoint(
+  current: CameraState,
+  nextZoom: number,
+  screenX: number,
+  screenY: number,
+  cssWidth: number,
+  cssHeight: number,
+  worldWidth: number,
+  worldHeight: number
+): CameraState {
+  const clampedNext = Math.max(CAMERA_LIMITS.minZoom, Math.min(CAMERA_LIMITS.maxZoom, nextZoom));
+  const baseScale = Math.min(cssWidth / worldWidth, cssHeight / worldHeight);
+  if (baseScale <= 0) return clampCamera(current.camX, current.camY, clampedNext);
+
+  const oldScale = baseScale * current.zoom;
+  const newScale = baseScale * clampedNext;
+  const worldX = current.camX + (screenX - cssWidth * 0.5) / oldScale;
+  const worldY = current.camY + (screenY - cssHeight * 0.5) / oldScale;
+  const nextCamX = worldX - (screenX - cssWidth * 0.5) / newScale;
+  const nextCamY = worldY - (screenY - cssHeight * 0.5) / newScale;
+  return clampCamera(nextCamX, nextCamY, clampedNext);
 }
 
 export function computeViewportTransform(
   cssWidth: number,
   cssHeight: number,
   worldWidth: number,
-  worldHeight: number
+  worldHeight: number,
+  camX = 0,
+  camY = 0,
+  zoom = 1
 ): ViewportTransform {
-  const scale = Math.min(cssWidth / worldWidth, cssHeight / worldHeight);
+  const baseScale = Math.min(cssWidth / worldWidth, cssHeight / worldHeight);
+  const scale = baseScale * zoom;
   return {
     scale,
-    offsetX: cssWidth * 0.5,
-    offsetY: cssHeight * 0.5,
+    offsetX: cssWidth * 0.5 - camX * scale,
+    offsetY: cssHeight * 0.5 - camY * scale,
     cssWidth,
     cssHeight,
+    camX,
+    camY,
+    zoom,
   };
 }
 
@@ -167,11 +229,11 @@ export function renderSpacetimeFieldFallback2D(
   ctx.fillStyle = '#070A10';
   ctx.fillRect(0, 0, cssWidth, cssHeight);
 
-  // Subtle gravity potential glow beneath each mass
+  // Subtle 3D gravity potential glow projected onto the z=0 shadow plane
   for (let i = 0; i < masses.length; i++) {
     const m = masses[i];
     const sp = worldToScreen(m.x, m.y, vp);
-    const glowR = Math.max(60, Math.sqrt(m.mu) * 1.15) * vp.scale;
+    const glowR = Math.max(60, Math.cbrt(m.mu) * 1.25) * vp.scale;
     const grad = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, glowR);
     if (m.kind === 'singularity') {
       grad.addColorStop(0, 'rgba(245, 158, 11, 0.28)');
@@ -192,16 +254,30 @@ export function renderSpacetimeFieldFallback2D(
     ctx.fill();
   }
 
-  // Draw warped 2+1D spacetime coordinate lattice sampled from the uniform grid
-  const { worldWidth, worldHeight, speedOfLight } = solver.config;
-  const halfW = worldWidth * 0.5;
-  const halfH = worldHeight * 0.5;
+  // Draw warped 2+1D spacetime coordinate lattice across visible universe bounds
+  const { speedOfLight } = solver.config;
+  const univHalfW = UNIVERSE_CONFIG.universeWidth * 0.5;
+  const univHalfH = UNIVERSE_CONFIG.universeHeight * 0.5;
   const c2 = speedOfLight * speedOfLight;
 
+  const viewLeft = Math.max(-univHalfW, -vp.offsetX / vp.scale);
+  const viewRight = Math.min(univHalfW, (cssWidth - vp.offsetX) / vp.scale);
+  const viewTop = Math.max(-univHalfH, -vp.offsetY / vp.scale);
+  const viewBottom = Math.min(univHalfH, (cssHeight - vp.offsetY) / vp.scale);
+
   if (viewMode === 'spacetime' || viewMode === 'vectors') {
-    const spacing = 50;
-    const step = 40;
+    const spacing = vp.zoom < 0.55 ? 100 : 50;
+    const step = vp.zoom < 0.55 ? 80 : 40;
     const warpFactor = 0.095;
+    const startX = Math.floor(viewLeft / spacing) * spacing;
+    const endX = Math.ceil(viewRight / spacing) * spacing;
+    const startY = Math.floor(viewTop / spacing) * spacing;
+    const endY = Math.ceil(viewBottom / spacing) * spacing;
+    const lineStartY = Math.max(-univHalfH, Math.floor(viewTop / step) * step);
+    const lineEndY = Math.min(univHalfH, Math.ceil(viewBottom / step) * step);
+    const lineStartX = Math.max(-univHalfW, Math.floor(viewLeft / step) * step);
+    const lineEndX = Math.min(univHalfW, Math.ceil(viewRight / step) * step);
+
     ctx.lineWidth = 1;
     ctx.strokeStyle =
       viewMode === 'spacetime'
@@ -209,44 +285,63 @@ export function renderSpacetimeFieldFallback2D(
         : 'rgba(56, 189, 248, 0.09)';
 
     ctx.beginPath();
+    const maxWarp = 62;
     // Vertical warped lines batched into one path
-    for (let wx = -halfW; wx <= halfW; wx += spacing) {
-      for (let wy = -halfH; wy <= halfH; wy += step) {
+    for (let wx = startX; wx <= endX; wx += spacing) {
+      let first = true;
+      for (let wy = lineStartY; wy <= lineEndY; wy += step) {
         const s = solver.sampleAt(wx, wy);
-        const dispX = wx - s.gx * warpFactor;
-        const dispY = wy - s.gy * warpFactor;
+        const gMag = Math.hypot(s.gx, s.gy);
+        const rawDisp = gMag * warpFactor;
+        const scale = rawDisp > 1e-4 ? (rawDisp / (1 + rawDisp / maxWarp)) / gMag : 0;
+        const dispX = wx - s.gx * scale;
+        const dispY = wy - s.gy * scale;
         const pt = worldToScreen(dispX, dispY, vp);
-        if (wy === -halfH) ctx.moveTo(pt.x, pt.y);
-        else ctx.lineTo(pt.x, pt.y);
+        if (first) {
+          ctx.moveTo(pt.x, pt.y);
+          first = false;
+        } else {
+          ctx.lineTo(pt.x, pt.y);
+        }
       }
     }
 
     // Horizontal warped lines batched into the same path
-    for (let wy = -halfH; wy <= halfH; wy += spacing) {
-      for (let wx = -halfW; wx <= halfW; wx += step) {
+    for (let wy = startY; wy <= endY; wy += spacing) {
+      let first = true;
+      for (let wx = lineStartX; wx <= lineEndX; wx += step) {
         const s = solver.sampleAt(wx, wy);
-        const dispX = wx - s.gx * warpFactor;
-        const dispY = wy - s.gy * warpFactor;
+        const gMag = Math.hypot(s.gx, s.gy);
+        const rawDisp = gMag * warpFactor;
+        const scale = rawDisp > 1e-4 ? (rawDisp / (1 + rawDisp / maxWarp)) / gMag : 0;
+        const dispX = wx - s.gx * scale;
+        const dispY = wy - s.gy * scale;
         const pt = worldToScreen(dispX, dispY, vp);
-        if (wx === -halfW) ctx.moveTo(pt.x, pt.y);
-        else ctx.lineTo(pt.x, pt.y);
+        if (first) {
+          ctx.moveTo(pt.x, pt.y);
+          first = false;
+        } else {
+          ctx.lineTo(pt.x, pt.y);
+        }
       }
     }
     ctx.stroke();
   }
 
-  // Equipotential contour bands sampled cleanly on coarse grid
+  // Equipotential contour bands sampled cleanly over visible universe bounds
   if (viewMode === 'contours') {
-    const cols = 80;
-    const rows = 50;
-    const dx = worldWidth / cols;
-    const dy = worldHeight / rows;
-    const contourInterval = 26000;
+    const cols = 72;
+    const rows = 45;
+    const spanW = Math.max(100, viewRight - viewLeft);
+    const spanH = Math.max(100, viewBottom - viewTop);
+    const dx = spanW / cols;
+    const dy = spanH / rows;
+    const contourInterval = 22000;
 
     for (let r = 0; r < rows; r++) {
-      const y0 = -halfH + r * dy;
+      const y0 = viewTop + r * dy;
       for (let c = 0; c < cols; c++) {
-        const x0 = -halfW + c * dx;
+        const x0 = viewLeft + c * dx;
         const s0 = solver.sampleAt(x0, y0);
         const s1 = solver.sampleAt(x0 + dx, y0);
         const s2 = solver.sampleAt(x0, y0 + dy);
@@ -310,7 +405,7 @@ export function renderVectorOverlay(
     ctx.fillRect(st.nx * cssWidth, st.ny * cssHeight, sz, sz);
   }
 
-  // Arena containment frame
+  // Core uniform grid boundary frame (1600 x 1000)
   const topLeft = worldToScreen(
     -state.solver.config.worldWidth * 0.5,
     -state.solver.config.worldHeight * 0.5,
@@ -330,20 +425,37 @@ export function renderVectorOverlay(
     botRight.y - topLeft.y
   );
 
+  // Outer universe gravitational escape boundary (4800 x 3000)
+  {
+    const univHalfW = UNIVERSE_CONFIG.universeWidth * 0.5;
+    const univHalfH = UNIVERSE_CONFIG.universeHeight * 0.5;
+    const uTL = worldToScreen(-univHalfW, -univHalfH, vp);
+    const uBR = worldToScreen(univHalfW, univHalfH, vp);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.36)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([8, 6]);
+    ctx.strokeRect(uTL.x, uTL.y, uBR.x - uTL.x, uBR.y - uTL.y);
+    ctx.restore();
+  }
+
   // Vector field arrows when viewMode === 'vectors'
   if (state.viewMode === 'vectors') {
-    const stepX = 80;
-    const stepY = 80;
-    const halfW = state.solver.config.worldWidth * 0.5 - 40;
-    const halfH = state.solver.config.worldHeight * 0.5 - 40;
+    const step = vp.zoom < 0.55 ? 160 : 80;
+    const univHalfW = UNIVERSE_CONFIG.universeWidth * 0.5 - 40;
+    const univHalfH = UNIVERSE_CONFIG.universeHeight * 0.5 - 40;
+    const minWX = Math.max(-univHalfW, Math.floor((-vp.offsetX / vp.scale) / step) * step);
+    const maxWX = Math.min(univHalfW, Math.ceil(((cssWidth - vp.offsetX) / vp.scale) / step) * step);
+    const minWY = Math.max(-univHalfH, Math.floor((-vp.offsetY / vp.scale) / step) * step);
+    const maxWY = Math.min(univHalfH, Math.ceil(((cssHeight - vp.offsetY) / vp.scale) / step) * step);
     ctx.lineWidth = 1.25;
 
-    for (let wx = -halfW; wx <= halfW; wx += stepX) {
-      for (let wy = -halfH; wy <= halfH; wy += stepY) {
+    for (let wx = minWX; wx <= maxWX; wx += step) {
+      for (let wy = minWY; wy <= maxWY; wy += step) {
         const s = state.solver.sampleAt(wx, wy);
         const mag = Math.hypot(s.gx, s.gy);
         if (mag < 2) continue;
-        const len = Math.min(28, 6 + Math.sqrt(mag) * 0.72) * vp.scale;
+        const len = Math.min(28, 6 + Math.sqrt(mag) * 0.72) * Math.max(0.45, vp.scale);
         const nx = s.gx / mag;
         const ny = s.gy / mag;
         const p0 = worldToScreen(wx, wy, vp);
@@ -362,7 +474,7 @@ export function renderVectorOverlay(
 
         // Arrow head
         const ang = Math.atan2(ny, nx);
-        const head = Math.max(3, 4.5 * vp.scale);
+        const head = Math.max(3, 4.5 * Math.max(0.45, vp.scale));
         ctx.beginPath();
         ctx.moveTo(p1x, p1y);
         ctx.lineTo(p1x - Math.cos(ang - 0.5) * head, p1y - Math.sin(ang - 0.5) * head);
@@ -439,14 +551,40 @@ export function renderVectorOverlay(
     ctx.fillText('TARGET', tp.x, tp.y - tr - 8);
   }
 
-  // Mass bodies
+  // Mass bodies (rendered as 2D orthographic shadow motion + oblique z-depth shadow cue)
   for (let i = 0; i < state.masses.length; i++) {
     const m = state.masses[i];
+    const mz = m.z ?? 0;
     const mp = worldToScreen(m.x, m.y, vp);
-    const r = Math.max(4, m.radius * vp.scale);
+    const depthScale = Math.max(0.72, Math.min(1.22, 1 + mz * 0.0007));
+    const r = Math.max(4, m.radius * vp.scale * depthScale);
     const isSelected = state.selectedMassId === m.id;
 
-    // Subtle velocity vector tail for mutually moving stars
+    // 3D-to-2D cast shadow footprint when body has non-zero z elevation
+    if (Math.abs(mz) > 3) {
+      const sh = worldToScreen(m.x + mz * 0.22, m.y + mz * 0.22, vp);
+      ctx.save();
+      ctx.strokeStyle =
+        mz > 0 ? 'rgba(34, 211, 238, 0.22)' : 'rgba(245, 158, 11, 0.22)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(mp.x, mp.y);
+      ctx.lineTo(sh.x, sh.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = 'rgba(2, 6, 23, 0.58)';
+      ctx.strokeStyle =
+        mz > 0 ? 'rgba(56, 189, 248, 0.28)' : 'rgba(245, 158, 11, 0.28)';
+      ctx.beginPath();
+      ctx.ellipse(sh.x, sh.y, Math.max(3, r * 0.88), Math.max(2.5, r * 0.68), 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Subtle velocity vector tail for mutually moving stars (projected 2D motion)
     const mvx = m.vx ?? 0;
     const mvy = m.vy ?? 0;
     const mSpd = Math.hypot(mvx, mvy);
@@ -603,12 +741,34 @@ export function renderVectorOverlay(
     ctx.fill();
   }
 
-  // Rocket hull
+  // Rocket hull (with subtle 2D shadow drop when deflected in 3D z)
   if (state.phase !== 'crashed') {
+    if (Math.abs(state.rocket.z) > 2) {
+      const rSh = worldToScreen(
+        state.rocket.x + state.rocket.z * 0.22,
+        state.rocket.y + state.rocket.z * 0.22,
+        vp
+      );
+      ctx.save();
+      ctx.strokeStyle = 'rgba(34, 211, 238, 0.28)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath();
+      ctx.moveTo(rp.x, rp.y);
+      ctx.lineTo(rSh.x, rSh.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(2, 6, 23, 0.6)';
+      ctx.beginPath();
+      ctx.arc(rSh.x, rSh.y, Math.max(3, 6 * vp.scale), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
     ctx.save();
     ctx.translate(rp.x, rp.y);
     ctx.rotate(state.rocket.angle);
-    const s = Math.max(0.85, vp.scale);
+    const s = Math.max(0.55, vp.scale);
 
     // Thruster flame cone when thrusting
     if (state.rocket.thrusting) {

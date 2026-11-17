@@ -7,7 +7,8 @@ import type {
 } from '../physics/types';
 
 /**
- * Generates a deterministic cluster of masses for the many-body uniform-grid showcase.
+ * Generates a deterministic 3D cluster of masses for the many-body uniform-grid showcase.
+ * Stars orbit in 3D (x, y, z) while their 2D shadow motion swirls on the equatorial plane.
  */
 export function generateDeterministicCluster(
   count: number,
@@ -15,7 +16,8 @@ export function generateDeterministicCluster(
   centerX = 0,
   centerY = 0,
   spreadX = 360,
-  spreadY = 260
+  spreadY = 260,
+  spreadZ = 85
 ): MassBody[] {
   const bodies: MassBody[] = [];
   let s = seed >>> 0;
@@ -25,38 +27,39 @@ export function generateDeterministicCluster(
   };
 
   for (let i = 0; i < count; i++) {
-    // Keep a navigable channel near y = -160..160 or spread cleanly around ring
     const angle = (i / count) * Math.PI * 2 + (nextRand() - 0.5) * 0.45;
     const radial = 0.25 + 0.75 * Math.sqrt(nextRand());
     const x = centerX + Math.cos(angle) * spreadX * radial;
     const y = centerY + Math.sin(angle) * spreadY * radial;
+    const z = (nextRand() - 0.5) * 2 * spreadZ;
 
-    // Avoid spawning right on the launch pad (-620, 0) or target (620, 0)
     if (Math.hypot(x + 620, y) < 140 || Math.hypot(x - 620, y) < 140) {
       continue;
     }
 
-    const mu = 4200 + nextRand() * 9800;
-    const radius = 10 + Math.sqrt(mu / 1200) * 3.5;
+    const mu = 750000 + nextRand() * 1750000;
+    const radius = 10 + Math.sqrt(mu / 220000) * 3.5;
     const dx = x - centerX;
     const dy = y - centerY;
     const dist = Math.max(40, Math.hypot(dx, dy));
-    // Tangential orbital speed scaled for stable swirling cluster under 2D mutual gravity
     const orbitalSpeed = 95 + 55 * (dist / Math.max(spreadX, spreadY));
     const vx = Math.round((-dy / dist) * orbitalSpeed);
     const vy = Math.round((dx / dist) * orbitalSpeed);
+    const vz = Math.round((nextRand() - 0.5) * 44);
 
     bodies.push({
       id: `cluster-${seed}-${i}`,
       x: Math.round(x),
       y: Math.round(y),
+      z: Math.round(z),
       vx,
       vy,
+      vz,
       mu: Math.round(mu),
       softening: radius + 12,
       radius,
       spin: (nextRand() - 0.5) * 1800,
-      kind: mu > 11000 ? 'compact' : 'asteroid',
+      kind: mu > 1950000 ? 'compact' : 'asteroid',
     });
   }
   return bodies;
@@ -67,7 +70,7 @@ export const MISSIONS: MissionConfig[] = [
     id: 'single-well',
     index: 1,
     title: '01 · Single Well Slingshot',
-    subtitle: 'Curve around a 2+1D logarithmic star well and capture the beacon.',
+    subtitle: 'Curve around a 3D 1PN relativistic star well and guide its 2D shadow to the beacon.',
     nBodyDefault: false,
     speedOfLight: 900,
     launchPos: { x: -560, y: 120 },
@@ -86,9 +89,11 @@ export const MISSIONS: MissionConfig[] = [
         label: 'Helios Core',
         x: 0,
         y: 10,
+        z: 0,
         vx: 0,
         vy: 0,
-        mu: 64000,
+        vz: 0,
+        mu: 10400000,
         softening: 46,
         radius: 38,
         spin: 0,
@@ -100,7 +105,7 @@ export const MISSIONS: MissionConfig[] = [
     id: 'binary-perihelion',
     index: 2,
     title: '02 · Binary Saddle Corridor',
-    subtitle: 'Twin stars mutually orbiting under 2+1D gravity; thread the shifting saddle.',
+    subtitle: 'Inclined 3D twin stars mutually orbiting; track their 2D shadows across the saddle.',
     nBodyDefault: true,
     speedOfLight: 860,
     launchPos: { x: -600, y: 0 },
@@ -119,9 +124,11 @@ export const MISSIONS: MissionConfig[] = [
         label: 'Castor A',
         x: 0,
         y: -155,
-        vx: 150,
+        z: -32,
+        vx: 126,
         vy: 0,
-        mu: 46000,
+        vz: 24,
+        mu: 10500000,
         softening: 38,
         radius: 30,
         spin: 0,
@@ -129,9 +136,11 @@ export const MISSIONS: MissionConfig[] = [
         orbit: {
           centerX: 0,
           centerY: 0,
+          centerZ: 0,
           orbitRadius: 155,
           angularSpeed: 0.28,
           phase: -Math.PI * 0.5,
+          zAmplitude: 32,
         },
       },
       {
@@ -139,9 +148,11 @@ export const MISSIONS: MissionConfig[] = [
         label: 'Castor B',
         x: 0,
         y: 155,
-        vx: -150,
+        z: 32,
+        vx: -126,
         vy: 0,
-        mu: 46000,
+        vz: -24,
+        mu: 10500000,
         softening: 38,
         radius: 30,
         spin: 0,
@@ -149,9 +160,11 @@ export const MISSIONS: MissionConfig[] = [
         orbit: {
           centerX: 0,
           centerY: 0,
+          centerZ: 0,
           orbitRadius: 155,
           angularSpeed: 0.28,
           phase: Math.PI * 0.5,
+          zAmplitude: -32,
         },
       },
     ],
@@ -160,7 +173,7 @@ export const MISSIONS: MissionConfig[] = [
     id: 'kerr-spin',
     index: 3,
     title: '03 · Frame-Dragging Vortex',
-    subtitle: 'Ride gravitomagnetic swirl around a rapidly spinning 2+1D compact remnant.',
+    subtitle: 'Ride 3D Lense-Thirring gravitomagnetic swirl around a rapidly spinning remnant.',
     nBodyDefault: false,
     speedOfLight: 780,
     launchPos: { x: -570, y: -180 },
@@ -179,12 +192,14 @@ export const MISSIONS: MissionConfig[] = [
         label: 'Spinning Remnant',
         x: 0,
         y: 0,
+        z: 0,
         vx: 0,
         vy: 0,
-        mu: 78000,
+        vz: 0,
+        mu: 15500000,
         softening: 42,
         radius: 34,
-        spin: 18500,
+        spin: 22000,
         kind: 'singularity',
       },
       {
@@ -192,9 +207,11 @@ export const MISSIONS: MissionConfig[] = [
         label: 'Outer Dwarf',
         x: 290,
         y: -210,
-        vx: 115,
-        vy: 158,
-        mu: 22000,
+        z: 60,
+        vx: 105,
+        vy: 145,
+        vz: -36,
+        mu: 4200000,
         softening: 30,
         radius: 22,
         spin: 0,
@@ -206,7 +223,7 @@ export const MISSIONS: MissionConfig[] = [
     id: 'dense-cluster',
     index: 4,
     title: '04 · 32-Mass Gravitational Belt',
-    subtitle: 'Navigate a dynamic 32-body N-body cluster summed on the uniform grid.',
+    subtitle: 'Navigate a dynamic 3D 32-body N-body cluster projected onto the 2D shadow plane.',
     nBodyDefault: true,
     speedOfLight: 850,
     launchPos: { x: -620, y: 180 },
@@ -219,13 +236,13 @@ export const MISSIONS: MissionConfig[] = [
       { id: 'wp-1', x: -180, y: 40, radius: 24 },
       { id: 'wp-2', x: 190, y: -40, radius: 24 },
     ],
-    masses: generateDeterministicCluster(32, 7711, 0, 0, 390, 290),
+    masses: generateDeterministicCluster(32, 7711, 0, 0, 390, 290, 80),
   },
   {
     id: 'horizon-needle',
     index: 5,
     title: '05 · Event Horizon Needle',
-    subtitle: 'Thread twin singularities where gravitational time dilation slows proper time.',
+    subtitle: 'Thread twin 3D singularities where gravitational time dilation slows proper time.',
     speedOfLight: 660,
     launchPos: { x: -610, y: 0 },
     defaultAimAngle: -0.06,
@@ -244,10 +261,11 @@ export const MISSIONS: MissionConfig[] = [
         label: 'Singularity N',
         x: 0,
         y: -148,
-        mu: 76000,
+        z: 0,
+        mu: 14500000,
         softening: 32,
         radius: 30,
-        spin: 12000,
+        spin: 14000,
         kind: 'singularity',
       },
       {
@@ -255,10 +273,11 @@ export const MISSIONS: MissionConfig[] = [
         label: 'Singularity S',
         x: 0,
         y: 148,
-        mu: 76000,
+        z: 0,
+        mu: 14500000,
         softening: 32,
         radius: 30,
-        spin: -12000,
+        spin: -14000,
         kind: 'singularity',
       },
     ],
@@ -267,7 +286,7 @@ export const MISSIONS: MissionConfig[] = [
     id: 'sandbox',
     index: 6,
     title: '06 · Spacetime Sandbox Lab',
-    subtitle: 'Place moving stars, singularities, or 16-mass clusters that attract and merge.',
+    subtitle: 'Place 3D moving stars, singularities, or clusters and watch their 2D shadow motions.',
     isSandbox: true,
     nBodyDefault: true,
     speedOfLight: 820,
@@ -284,9 +303,11 @@ export const MISSIONS: MissionConfig[] = [
         label: 'Central Star',
         x: -110,
         y: 110,
-        vx: 110,
-        vy: 85,
-        mu: 56000,
+        z: -42,
+        vx: 95,
+        vy: 75,
+        vz: 24,
+        mu: 10800000,
         softening: 42,
         radius: 34,
         spin: 0,
@@ -297,12 +318,14 @@ export const MISSIONS: MissionConfig[] = [
         label: 'Compact Core',
         x: 130,
         y: -120,
-        vx: -125,
-        vy: -95,
-        mu: 48000,
+        z: 42,
+        vx: -105,
+        vy: -85,
+        vz: -24,
+        mu: 9400000,
         softening: 34,
         radius: 26,
-        spin: 10000,
+        spin: 12000,
         kind: 'singularity',
       },
     ],
@@ -323,33 +346,37 @@ export function evaluateFlightState(
   rocketConfig: RocketConfig,
   universeWidth = 4800,
   universeHeight = 3000,
-  escapeFieldThreshold = 14,
-  minEscapeRadius = 1250
+  escapeFieldThreshold = 3.2,
+  minEscapeRadius = 1250,
+  universeDepth = 1800
 ): FlightEvaluation {
   const collectedWaypointIds: string[] = [];
 
   for (let i = 0; i < waypoints.length; i++) {
     const wp = waypoints[i];
     if (!wp.collected) {
-      const dist = Math.hypot(rocket.x - wp.x, rocket.y - wp.y);
+      const dist = Math.hypot(rocket.x - wp.x, rocket.y - wp.y, rocket.z);
       if (dist <= wp.radius + rocketConfig.hullRadius) {
         collectedWaypointIds.push(wp.id);
       }
     }
   }
 
-  // Check mass / event horizon impact & compute barycenter + local gravitational pull
   let totalMu = 0;
   let baryX = 0;
   let baryY = 0;
+  let baryZ = 0;
   let gx = 0;
   let gy = 0;
+  let gz = 0;
 
   for (let i = 0; i < masses.length; i++) {
     const m = masses[i];
+    const mz = m.z ?? 0;
     const dx = rocket.x - m.x;
     const dy = rocket.y - m.y;
-    const dist = Math.hypot(dx, dy);
+    const dz = rocket.z - mz;
+    const dist = Math.hypot(dx, dy, dz);
     if (dist <= m.radius + rocketConfig.hullRadius * 0.75) {
       const reason =
         m.kind === 'singularity'
@@ -361,29 +388,37 @@ export function evaluateFlightState(
     totalMu += m.mu;
     baryX += m.x * m.mu;
     baryY += m.y * m.mu;
+    baryZ += mz * m.mu;
     const eps2 = m.softening * m.softening;
-    const r2 = dx * dx + dy * dy + eps2;
-    gx -= (m.mu * dx) / r2;
-    gy -= (m.mu * dy) / r2;
+    const r2 = dx * dx + dy * dy + dz * dz + eps2;
+    const r = Math.sqrt(r2);
+    const gFac = m.mu / (r2 * r);
+    gx -= dx * gFac;
+    gy -= dy * gFac;
+    gz -= dz * gFac;
   }
 
   // Check target orbital beacon capture
-  const targetDist = Math.hypot(rocket.x - target.x, rocket.y - target.y);
+  const targetDist = Math.hypot(rocket.x - target.x, rocket.y - target.y, rocket.z);
   if (targetDist <= target.radius + rocketConfig.hullRadius * 0.5) {
-    const speed = Math.hypot(rocket.vx, rocket.vy);
+    const speed = Math.hypot(rocket.vx, rocket.vy, rocket.vz);
     if (target.maxCaptureSpeed <= 0 || speed <= target.maxCaptureSpeed) {
       return {
         status: 'victory',
-        reason: 'Captured target beacon along relativistic geodesic.',
+        reason: 'Captured target beacon along 3D relativistic geodesic.',
         collectedWaypointIds,
       };
     }
   }
 
-  // Offscreen movement is allowed; destroy object only when escaping the gravitational field
   const univHalfW = universeWidth * 0.5;
   const univHalfH = universeHeight * 0.5;
-  if (Math.abs(rocket.x) > univHalfW || Math.abs(rocket.y) > univHalfH) {
+  const univHalfD = universeDepth * 0.5;
+  if (
+    Math.abs(rocket.x) > univHalfW ||
+    Math.abs(rocket.y) > univHalfH ||
+    Math.abs(rocket.z) > univHalfD
+  ) {
     return {
       status: 'crashed',
       reason: 'Escaped the gravitational field and exited the simulated universe.',
@@ -394,12 +429,14 @@ export function evaluateFlightState(
   if (totalMu > 0) {
     baryX /= totalMu;
     baryY /= totalMu;
+    baryZ /= totalMu;
   }
   const relX = rocket.x - baryX;
   const relY = rocket.y - baryY;
-  const distFromBary = Math.hypot(relX, relY);
-  const outwardDot = relX * rocket.vx + relY * rocket.vy;
-  const fieldMag = Math.hypot(gx, gy);
+  const relZ = rocket.z - baryZ;
+  const distFromBary = Math.hypot(relX, relY, relZ);
+  const outwardDot = relX * rocket.vx + relY * rocket.vy + relZ * rocket.vz;
+  const fieldMag = Math.hypot(gx, gy, gz);
 
   if (distFromBary > minEscapeRadius && outwardDot > 0 && fieldMag < escapeFieldThreshold) {
     return {

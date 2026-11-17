@@ -69,7 +69,7 @@ export class WebGPUGameBackend {
   private readonly computeBindGroup: unknown;
   private readonly renderBindGroup: unknown;
 
-  private readonly uniformArray = new ArrayBuffer(48);
+  private readonly uniformArray = new ArrayBuffer(64);
   private readonly uniformU32 = new Uint32Array(this.uniformArray);
   private readonly uniformF32 = new Float32Array(this.uniformArray);
   private readonly massStaging = new Float32Array(MAX_MASSES_GPU * 8);
@@ -85,7 +85,7 @@ export class WebGPUGameBackend {
     this.config = config;
 
     this.uniformBuffer = device.createBuffer({
-      size: 48,
+      size: 64,
       usage: GPU_BUFFER_USAGE.UNIFORM | GPU_BUFFER_USAGE.COPY_DST,
     });
 
@@ -94,9 +94,9 @@ export class WebGPUGameBackend {
       usage: GPU_BUFFER_USAGE.STORAGE | GPU_BUFFER_USAGE.COPY_DST,
     });
 
-    const cellCount = config.cols * config.rows;
+    const cellCount = config.cols * config.rows * config.layers;
     this.gridBuffer = device.createBuffer({
-      size: cellCount * 16,
+      size: cellCount * 32,
       usage: GPU_BUFFER_USAGE.STORAGE | GPU_BUFFER_USAGE.COPY_DST,
     });
 
@@ -132,6 +132,7 @@ export class WebGPUGameBackend {
       entries: [
         { binding: 0, resource: { buffer: this.uniformBuffer } },
         { binding: 1, resource: { buffer: this.gridBuffer } },
+        { binding: 2, resource: { buffer: this.massBuffer } },
       ],
     });
   }
@@ -175,20 +176,32 @@ export class WebGPUGameBackend {
     speedOfLight: number,
     viewMode: FieldViewMode,
     elapsedTime: number,
-    recomputeGrid: boolean
+    recomputeGrid: boolean,
+    camX = 0,
+    camY = 0,
+    viewWorldW = this.config.worldWidth,
+    viewWorldH = this.config.worldHeight,
+    zoom = 1
   ): void {
     const massCount = Math.min(masses.length, MAX_MASSES_GPU);
     const modeIdx = viewMode === 'spacetime' ? 0 : viewMode === 'contours' ? 1 : 2;
 
     this.uniformU32[0] = this.config.cols;
     this.uniformU32[1] = this.config.rows;
-    this.uniformU32[2] = massCount;
-    this.uniformU32[3] = modeIdx;
-    this.uniformF32[4] = this.config.worldWidth;
-    this.uniformF32[5] = this.config.worldHeight;
-    this.uniformF32[6] = this.config.potentialRefRadius;
-    this.uniformF32[7] = speedOfLight;
-    this.uniformF32[8] = elapsedTime;
+    this.uniformU32[2] = this.config.layers;
+    this.uniformU32[3] = massCount;
+    this.uniformU32[4] = modeIdx;
+    this.uniformF32[5] = this.config.worldWidth;
+    this.uniformF32[6] = this.config.worldHeight;
+    this.uniformF32[7] = this.config.worldDepth;
+    this.uniformF32[8] = speedOfLight;
+    this.uniformF32[9] = elapsedTime;
+    this.uniformF32[10] = camX;
+    this.uniformF32[11] = camY;
+    this.uniformF32[12] = viewWorldW;
+    this.uniformF32[13] = viewWorldH;
+    this.uniformF32[14] = zoom;
+    this.uniformF32[15] = 0;
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformArray);
 
@@ -198,12 +211,12 @@ export class WebGPUGameBackend {
         const base = i * 8;
         this.massStaging[base] = m.x;
         this.massStaging[base + 1] = m.y;
-        this.massStaging[base + 2] = m.mu;
-        this.massStaging[base + 3] = m.softening;
-        this.massStaging[base + 4] = m.spin;
-        this.massStaging[base + 5] = m.radius;
-        this.massStaging[base + 6] = m.kind === 'singularity' ? 2 : m.kind === 'compact' ? 1 : 0;
-        this.massStaging[base + 7] = 0;
+        this.massStaging[base + 2] = m.z ?? 0;
+        this.massStaging[base + 3] = m.mu;
+        this.massStaging[base + 4] = m.softening;
+        this.massStaging[base + 5] = m.spin;
+        this.massStaging[base + 6] = m.radius;
+        this.massStaging[base + 7] = m.kind === 'singularity' ? 2 : m.kind === 'compact' ? 1 : 0;
       }
       if (massCount > 0) {
         this.device.queue.writeBuffer(
@@ -221,9 +234,9 @@ export class WebGPUGameBackend {
       computePass.setPipeline(this.computePipeline);
       computePass.setBindGroup(0, this.computeBindGroup);
       computePass.dispatchWorkgroups(
-        Math.ceil(this.config.cols / 8),
-        Math.ceil(this.config.rows / 8),
-        1
+        Math.ceil(this.config.cols / 4),
+        Math.ceil(this.config.rows / 4),
+        Math.ceil(this.config.layers / 4)
       );
       computePass.end();
     }

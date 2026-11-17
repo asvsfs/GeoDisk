@@ -18,19 +18,22 @@ import {
   generateDeterministicCluster,
 } from './game/missions';
 import {
+  CAMERA_LIMITS,
   ParticlePool,
+  clampCamera,
   computeViewportTransform,
   renderSpacetimeFieldFallback2D,
   renderVectorOverlay,
   screenToWorld,
   worldToScreen,
+  zoomCameraAroundPoint,
   type ViewportTransform,
 } from './gpu/spacetimeCanvasRenderer';
 import { WebGPUGameBackend } from './gpu/webgpuGravityRenderer';
 import {
   CpuGravityGridSolver,
   DEFAULT_GRID_CONFIG,
-  Direct2Plus1DFieldSampler,
+  Direct3DFieldSampler,
   UNIVERSE_CONFIG,
   advanceOrbitingMasses,
   stepMassBodiesNBody,
@@ -73,8 +76,18 @@ interface MutableSim {
   pendingOutcomeDelay: number;
   pendingOutcome: RunSnapshot | null;
   gridDirty: boolean;
+  cameraDirty: boolean;
   selectedMassId: string | null;
-  dragMode: 'none' | 'aim' | 'mass';
+  dragMode: 'none' | 'aim' | 'mass' | 'pan';
+  panLastX: number;
+  panLastY: number;
+  camX: number;
+  camY: number;
+  zoom: number;
+  cameraTool: 'aim' | 'pan';
+  followRocket: boolean;
+  cssWidth: number;
+  cssHeight: number;
   lastTelemetrySync: number;
   lastGridSync: number;
   lastPredictionSync: number;
@@ -118,7 +131,7 @@ export default function App() {
   const [phase, setPhase] = useState<FlightPhase>('aiming');
   const [missionIndex, setMissionIndex] = useState<number>(initialMissionIdx);
   const [viewMode, setViewMode] = useState<FieldViewMode>('spacetime');
-  const [physicsModelId, setPhysicsModelId] = useState<string>('gr-2plus1d');
+  const [physicsModelId, setPhysicsModelId] = useState<string>('gr-3d');
   const [nBodyEnabled, setNBodyEnabled] = useState<boolean>(
     Boolean(initialMission.nBodyDefault)
   );
@@ -128,6 +141,9 @@ export default function App() {
   const [launchSpeed, setLaunchSpeed] = useState<number>(initialMission.defaultLaunchSpeed);
   const [muted, setMuted] = useState<boolean>(false);
   const [gpuActive, setGpuActive] = useState<boolean | null>(null);
+  const [zoom, setZoom] = useState<number>(CAMERA_LIMITS.defaultZoom);
+  const [cameraTool, setCameraTool] = useState<'aim' | 'pan'>('aim');
+  const [followRocket, setFollowRocket] = useState<boolean>(false);
   const [snapshot, setSnapshot] = useState<RunSnapshot | null>(null);
   const [telemetry, setTelemetry] = useState<HudTelemetry>({
     speed: initialMission.defaultLaunchSpeed,
@@ -177,7 +193,7 @@ export default function App() {
     aimAngle: initialMission.defaultAimAngle,
     launchSpeed: initialMission.defaultLaunchSpeed,
     viewMode: 'spacetime',
-    physicsModelId: 'gr-2plus1d',
+    physicsModelId: 'gr-3d',
     nBodyEnabled: Boolean(initialMission.nBodyDefault),
     elapsedTime: 0,
     hitstop: 0,
@@ -185,8 +201,18 @@ export default function App() {
     pendingOutcomeDelay: 0,
     pendingOutcome: null,
     gridDirty: true,
+    cameraDirty: true,
     selectedMassId: null,
     dragMode: 'none',
+    panLastX: 0,
+    panLastY: 0,
+    camX: 0,
+    camY: 0,
+    zoom: CAMERA_LIMITS.defaultZoom,
+    cameraTool: 'aim',
+    followRocket: false,
+    cssWidth: 1280,
+    cssHeight: 720,
     lastTelemetrySync: 0,
     lastGridSync: 0,
     lastPredictionSync: 0,
@@ -194,11 +220,36 @@ export default function App() {
     destroyFlashes: [],
   });
 
+  const applyCameraState = useCallback((camX: number, camY: number, nextZoom: number) => {
+    const sim = simRef.current;
+    const clamped = clampCamera(
+      camX,
+      camY,
+      nextZoom,
+      UNIVERSE_CONFIG.universeWidth,
+      UNIVERSE_CONFIG.universeHeight
+    );
+    sim.camX = clamped.camX;
+    sim.camY = clamped.camY;
+    sim.zoom = clamped.zoom;
+    sim.cameraDirty = true;
+    vpRef.current = computeViewportTransform(
+      sim.cssWidth,
+      sim.cssHeight,
+      DEFAULT_GRID_CONFIG.worldWidth,
+      DEFAULT_GRID_CONFIG.worldHeight,
+      clamped.camX,
+      clamped.camY,
+      clamped.zoom
+    );
+    setZoom(clamped.zoom);
+  }, []);
+
   const recomputePredictionOnly = useCallback(() => {
     const sim = simRef.current;
     const solver = solverRef.current;
     const mission = MISSIONS[sim.missionIndex];
-    const model = ROCKET_PHYSICS_REGISTRY[sim.physicsModelId] ?? ROCKET_PHYSICS_REGISTRY['gr-2plus1d'];
+    const model = ROCKET_PHYSICS_REGISTRY[sim.physicsModelId] ?? ROCKET_PHYSICS_REGISTRY['gr-3d'];
     const previewRocket =
       sim.phase === 'aiming'
         ? createInitialRocketState(
@@ -212,7 +263,7 @@ export default function App() {
 
     if (sim.nBodyEnabled && sim.masses.length > 1) {
       let previewMasses = cloneMasses(sim.masses);
-      const dynamicSampler = new Direct2Plus1DFieldSampler(previewMasses, solver.config);
+      const dynamicSampler = new Direct3DFieldSampler(previewMasses, solver.config);
       sim.predictedTrajectory = predictTrajectory(
         previewRocket,
         model,
@@ -225,8 +276,10 @@ export default function App() {
           const stepRes = stepMassBodiesNBody(previewMasses, stepDt, mission.speedOfLight, {
             worldWidth: DEFAULT_GRID_CONFIG.worldWidth,
             worldHeight: DEFAULT_GRID_CONFIG.worldHeight,
+            worldDepth: DEFAULT_GRID_CONFIG.worldDepth,
             universeWidth: UNIVERSE_CONFIG.universeWidth,
             universeHeight: UNIVERSE_CONFIG.universeHeight,
+            universeDepth: UNIVERSE_CONFIG.universeDepth,
             containInArena: false,
             mergeOnCollision: true,
             destroyOnEscape: true,
@@ -240,7 +293,8 @@ export default function App() {
         UNIVERSE_CONFIG.universeWidth,
         UNIVERSE_CONFIG.universeHeight,
         UNIVERSE_CONFIG.escapeFieldThreshold,
-        UNIVERSE_CONFIG.minEscapeRadius
+        UNIVERSE_CONFIG.minEscapeRadius,
+        UNIVERSE_CONFIG.universeDepth
       );
     } else {
       sim.predictedTrajectory = predictTrajectory(
@@ -255,7 +309,8 @@ export default function App() {
         UNIVERSE_CONFIG.universeWidth,
         UNIVERSE_CONFIG.universeHeight,
         UNIVERSE_CONFIG.escapeFieldThreshold,
-        UNIVERSE_CONFIG.minEscapeRadius
+        UNIVERSE_CONFIG.minEscapeRadius,
+        UNIVERSE_CONFIG.universeDepth
       );
     }
     sim.lastPredictionSync = performance.now();
@@ -278,7 +333,7 @@ export default function App() {
     const spd =
       sim.phase === 'aiming'
         ? sim.launchSpeed
-        : Math.hypot(sim.rocket.vx, sim.rocket.vy);
+        : Math.hypot(sim.rocket.vx, sim.rocket.vy, sim.rocket.vz);
     const collected = sim.waypoints.filter((w) => w.collected).length;
     const halfViewW = DEFAULT_GRID_CONFIG.worldWidth * 0.5;
     const halfViewH = DEFAULT_GRID_CONFIG.worldHeight * 0.5;
@@ -344,6 +399,22 @@ export default function App() {
       sim.selectedMassId = null;
       sim.escapedCount = 0;
       sim.destroyFlashes = [];
+      sim.camX = 0;
+      sim.camY = 0;
+      sim.zoom = CAMERA_LIMITS.defaultZoom;
+      sim.cameraDirty = true;
+      sim.followRocket = false;
+      vpRef.current = computeViewportTransform(
+        sim.cssWidth,
+        sim.cssHeight,
+        DEFAULT_GRID_CONFIG.worldWidth,
+        DEFAULT_GRID_CONFIG.worldHeight,
+        0,
+        0,
+        CAMERA_LIMITS.defaultZoom
+      );
+      setZoom(CAMERA_LIMITS.defaultZoom);
+      setFollowRocket(false);
       particlesRef.current.clear();
       soundEngine.setThrustActive(false);
 
@@ -486,6 +557,7 @@ export default function App() {
       } else {
         const jx = (Math.random() - 0.5) * 380;
         const jy = (Math.random() - 0.5) * 260;
+        const jz = (Math.random() - 0.5) * 120;
         const dist = Math.max(40, Math.hypot(jx, jy));
         const orbSpd = sim.nBodyEnabled ? 115 : 0;
         sim.masses = [
@@ -495,9 +567,11 @@ export default function App() {
             label: kind === 'star' ? 'Star' : 'Singularity',
             x: Math.round(jx),
             y: Math.round(jy),
+            z: Math.round(jz),
             vx: Math.round((-jy / dist) * orbSpd),
             vy: Math.round((jx / dist) * orbSpd),
-            mu: kind === 'star' ? 52000 : 72000,
+            vz: sim.nBodyEnabled ? Math.round((Math.random() - 0.5) * 38) : 0,
+            mu: kind === 'star' ? 9800000 : 13500000,
             softening: kind === 'star' ? 40 : 30,
             radius: kind === 'star' ? 32 : 26,
             spin: kind === 'singularity' ? 14000 : 0,
@@ -520,6 +594,52 @@ export default function App() {
     recomputeGridAndPrediction();
     syncTelemetryImmediate();
   }, [recomputeGridAndPrediction, syncTelemetryImmediate]);
+
+  const handleZoomIn = useCallback(() => {
+    const sim = simRef.current;
+    applyCameraState(sim.camX, sim.camY, sim.zoom * 1.28);
+  }, [applyCameraState]);
+
+  const handleZoomOut = useCallback(() => {
+    const sim = simRef.current;
+    applyCameraState(sim.camX, sim.camY, sim.zoom / 1.28);
+  }, [applyCameraState]);
+
+  const handleResetCamera = useCallback(() => {
+    const sim = simRef.current;
+    sim.followRocket = false;
+    setFollowRocket(false);
+    applyCameraState(0, 0, CAMERA_LIMITS.defaultZoom);
+  }, [applyCameraState]);
+
+  const handleToggleCameraTool = useCallback(() => {
+    const sim = simRef.current;
+    const next = sim.cameraTool === 'aim' ? 'pan' : 'aim';
+    sim.cameraTool = next;
+    setCameraTool(next);
+  }, []);
+
+  const handleToggleFollowRocket = useCallback(() => {
+    const sim = simRef.current;
+    const next = !sim.followRocket;
+    sim.followRocket = next;
+    setFollowRocket(next);
+    if (next) {
+      applyCameraState(sim.rocket.x, sim.rocket.y, sim.zoom);
+    }
+  }, [applyCameraState]);
+
+  const handlePanToWorld = useCallback(
+    (wx: number, wy: number) => {
+      const sim = simRef.current;
+      if (sim.followRocket) {
+        sim.followRocket = false;
+        setFollowRocket(false);
+      }
+      applyCameraState(wx, wy, sim.zoom);
+    },
+    [applyCameraState]
+  );
 
   // Keep body data-state synced on mount
   useEffect(() => {
@@ -574,11 +694,17 @@ export default function App() {
       bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
       fieldCacheDirty = true;
       renderedWhileIdle = false;
+      const sim = simRef.current;
+      sim.cssWidth = rect.width;
+      sim.cssHeight = rect.height;
       vpRef.current = computeViewportTransform(
         rect.width,
         rect.height,
         DEFAULT_GRID_CONFIG.worldWidth,
-        DEFAULT_GRID_CONFIG.worldHeight
+        DEFAULT_GRID_CONFIG.worldHeight,
+        sim.camX,
+        sim.camY,
+        sim.zoom
       );
     };
 
@@ -637,15 +763,17 @@ export default function App() {
         } else {
           sim.elapsedTime += dt;
 
-          // Update moving stars: true mutual N-body 2+1D attraction OR kinematic orbits
+          // Update moving stars: true mutual N-body 3D attraction OR kinematic orbits
           let massesMoved = false;
           let hadTopologyChange = false;
           if (sim.nBodyEnabled && sim.masses.length > 1) {
             const nbodyRes = stepMassBodiesNBody(sim.masses, dt, mission.speedOfLight, {
               worldWidth: DEFAULT_GRID_CONFIG.worldWidth,
               worldHeight: DEFAULT_GRID_CONFIG.worldHeight,
+              worldDepth: DEFAULT_GRID_CONFIG.worldDepth,
               universeWidth: UNIVERSE_CONFIG.universeWidth,
               universeHeight: UNIVERSE_CONFIG.universeHeight,
+              universeDepth: UNIVERSE_CONFIG.universeDepth,
               containInArena: false,
               mergeOnCollision: true,
               destroyOnEscape: true,
@@ -708,34 +836,61 @@ export default function App() {
           }
         }
 
-        // Aiming keyboard adjustment
-        if (sim.gameState === 'playing' && sim.phase === 'aiming') {
+        // Camera keyboard panning (when Pan tool active during aiming, or holding Shift anytime)
+        if (sim.gameState === 'playing') {
           const keys = keysRef.current;
-          let angleChanged = false;
-          let speedChanged = false;
+          const shiftHeld = keys.has('ShiftLeft') || keys.has('ShiftRight');
+          const panWithKeys =
+            shiftHeld || (sim.cameraTool === 'pan' && sim.phase === 'aiming');
 
-          if (keys.has('KeyA') || keys.has('ArrowLeft')) {
-            sim.aimAngle -= 1.6 * dt;
-            angleChanged = true;
-          }
-          if (keys.has('KeyD') || keys.has('ArrowRight')) {
-            sim.aimAngle += 1.6 * dt;
-            angleChanged = true;
-          }
-          if (keys.has('KeyW') || keys.has('ArrowUp')) {
-            sim.launchSpeed = Math.min(mission.maxLaunchSpeed, sim.launchSpeed + 190 * dt);
-            speedChanged = true;
-          }
-          if (keys.has('KeyS') || keys.has('ArrowDown')) {
-            sim.launchSpeed = Math.max(120, sim.launchSpeed - 190 * dt);
-            speedChanged = true;
-          }
+          if (panWithKeys) {
+            const panX =
+              (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) -
+              (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
+            const panY =
+              (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0) -
+              (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0);
 
-          if (angleChanged || speedChanged) {
-            sim.rocket.angle = sim.aimAngle;
-            if (angleChanged) setAimAngleDeg((sim.aimAngle * 180) / Math.PI);
-            if (speedChanged) setLaunchSpeed(sim.launchSpeed);
-            recomputeGridAndPrediction();
+            if (panX !== 0 || panY !== 0) {
+              const panSpd = (780 / Math.max(0.25, sim.zoom)) * dt;
+              if (sim.followRocket) {
+                sim.followRocket = false;
+                setFollowRocket(false);
+              }
+              applyCameraState(
+                sim.camX + panX * panSpd,
+                sim.camY + panY * panSpd,
+                sim.zoom
+              );
+            }
+          } else if (sim.phase === 'aiming') {
+            // Aiming keyboard adjustment
+            let angleChanged = false;
+            let speedChanged = false;
+
+            if (keys.has('KeyA') || keys.has('ArrowLeft')) {
+              sim.aimAngle -= 1.6 * dt;
+              angleChanged = true;
+            }
+            if (keys.has('KeyD') || keys.has('ArrowRight')) {
+              sim.aimAngle += 1.6 * dt;
+              angleChanged = true;
+            }
+            if (keys.has('KeyW') || keys.has('ArrowUp')) {
+              sim.launchSpeed = Math.min(mission.maxLaunchSpeed, sim.launchSpeed + 190 * dt);
+              speedChanged = true;
+            }
+            if (keys.has('KeyS') || keys.has('ArrowDown')) {
+              sim.launchSpeed = Math.max(120, sim.launchSpeed - 190 * dt);
+              speedChanged = true;
+            }
+
+            if (angleChanged || speedChanged) {
+              sim.rocket.angle = sim.aimAngle;
+              if (angleChanged) setAimAngleDeg((sim.aimAngle * 180) / Math.PI);
+              if (speedChanged) setLaunchSpeed(sim.launchSpeed);
+              recomputeGridAndPrediction();
+            }
           }
         }
 
@@ -754,7 +909,7 @@ export default function App() {
 
           const model =
             ROCKET_PHYSICS_REGISTRY[sim.physicsModelId] ??
-            ROCKET_PHYSICS_REGISTRY['gr-2plus1d'];
+            ROCKET_PHYSICS_REGISTRY['gr-3d'];
 
           sim.rocket = model.step(
             sim.rocket,
@@ -801,7 +956,8 @@ export default function App() {
             UNIVERSE_CONFIG.universeWidth,
             UNIVERSE_CONFIG.universeHeight,
             UNIVERSE_CONFIG.escapeFieldThreshold,
-            UNIVERSE_CONFIG.minEscapeRadius
+            UNIVERSE_CONFIG.minEscapeRadius,
+            UNIVERSE_CONFIG.universeDepth
           );
 
           if (evalRes.collectedWaypointIds.length > 0) {
@@ -885,6 +1041,34 @@ export default function App() {
           sim.trauma = Math.max(0, sim.trauma - dt * 1.9);
         }
 
+        // Follow-rocket camera tracking
+        if (sim.followRocket && sim.gameState === 'playing' && sim.phase !== 'crashed') {
+          const lerp = 1 - Math.exp(-9 * dt);
+          const nextX = sim.camX + (sim.rocket.x - sim.camX) * lerp;
+          const nextY = sim.camY + (sim.rocket.y - sim.camY) * lerp;
+          const clamped = clampCamera(
+            nextX,
+            nextY,
+            sim.zoom,
+            UNIVERSE_CONFIG.universeWidth,
+            UNIVERSE_CONFIG.universeHeight
+          );
+          if (Math.abs(clamped.camX - sim.camX) > 0.25 || Math.abs(clamped.camY - sim.camY) > 0.25) {
+            sim.camX = clamped.camX;
+            sim.camY = clamped.camY;
+            sim.cameraDirty = true;
+            vpRef.current = computeViewportTransform(
+              sim.cssWidth,
+              sim.cssHeight,
+              DEFAULT_GRID_CONFIG.worldWidth,
+              DEFAULT_GRID_CONFIG.worldHeight,
+              sim.camX,
+              sim.camY,
+              sim.zoom
+            );
+          }
+        }
+
         // Throttle React HUD telemetry state updates (~4.5 Hz) to avoid reconciliation pressure
         if (now - sim.lastTelemetrySync > 220 && (sim.phase === 'flying' || sim.nBodyEnabled)) {
           sim.lastTelemetrySync = now;
@@ -894,7 +1078,7 @@ export default function App() {
 
       // Avoid burning CPU redraws while a static Pause/GameOver modal covers the screen
       const isModalOpen = sim.gameState === 'paused' || sim.gameState === 'gameover';
-      if (isModalOpen && renderedWhileIdle && !sim.gridDirty) {
+      if (isModalOpen && renderedWhileIdle && !sim.gridDirty && !sim.cameraDirty) {
         rafId = requestAnimationFrame(frame);
         return;
       }
@@ -909,8 +1093,10 @@ export default function App() {
         offsetX: vpRef.current.offsetX + shakeX,
         offsetY: vpRef.current.offsetY + shakeY,
       };
+      const viewWorldW = vp.cssWidth / Math.max(0.001, vp.scale);
+      const viewWorldH = vp.cssHeight / Math.max(0.001, vp.scale);
 
-      // Render Layer 1: WebGPU Compute+Render OR Static CPU Canvas2D Field Fallback (drawn only when dirty)
+      // Render Layer 1: WebGPU Compute+Render OR Static CPU Canvas2D Field Fallback
       const gpuBackend = gpuBackendRef.current;
       if (gpuBackend) {
         gpuBackend.renderFrame(
@@ -918,12 +1104,19 @@ export default function App() {
           mission.speedOfLight,
           sim.viewMode,
           sim.elapsedTime,
-          sim.gridDirty
+          sim.gridDirty,
+          sim.camX,
+          sim.camY,
+          viewWorldW,
+          viewWorldH,
+          sim.zoom
         );
         sim.gridDirty = false;
+        sim.cameraDirty = false;
       } else if (
         fieldCacheDirty ||
         cachedViewMode !== sim.viewMode ||
+        (sim.cameraDirty && now - lastBgRedraw > 45) ||
         (sim.gridDirty && now - lastBgRedraw > 110)
       ) {
         renderSpacetimeFieldFallback2D(
@@ -934,6 +1127,7 @@ export default function App() {
           vpRef.current
         );
         sim.gridDirty = false;
+        sim.cameraDirty = false;
         fieldCacheDirty = false;
         cachedViewMode = sim.viewMode;
         lastBgRedraw = now;
@@ -981,6 +1175,10 @@ export default function App() {
             viewHeight: DEFAULT_GRID_CONFIG.worldHeight,
             universeWidth: UNIVERSE_CONFIG.universeWidth,
             universeHeight: UNIVERSE_CONFIG.universeHeight,
+            camX: sim.camX,
+            camY: sim.camY,
+            camViewWidth: viewWorldW,
+            camViewHeight: viewWorldH,
             destroyFlashes: sim.destroyFlashes,
           });
         }
@@ -998,7 +1196,7 @@ export default function App() {
       gpuBackendRef.current?.dispose();
       gpuBackendRef.current = null;
     };
-  }, [recomputeGridAndPrediction, recomputePredictionOnly, setGameStateSynced, syncTelemetryImmediate]);
+  }, [applyCameraState, recomputeGridAndPrediction, recomputePredictionOnly, setGameStateSynced, syncTelemetryImmediate]);
 
   // Unified Keyboard Input & Window Blur Hygiene
   useEffect(() => {
@@ -1031,6 +1229,34 @@ export default function App() {
         e.preventDefault();
         handleResetMission();
         return;
+      }
+
+      if (sim.gameState === 'playing') {
+        if (e.code === 'Equal' || e.code === 'NumpadAdd') {
+          e.preventDefault();
+          handleZoomIn();
+          return;
+        }
+        if (e.code === 'Minus' || e.code === 'NumpadSubtract') {
+          e.preventDefault();
+          handleZoomOut();
+          return;
+        }
+        if (e.code === 'Digit0' || e.code === 'Numpad0') {
+          e.preventDefault();
+          handleResetCamera();
+          return;
+        }
+        if (e.code === 'KeyV') {
+          e.preventDefault();
+          handleToggleCameraTool();
+          return;
+        }
+        if (e.code === 'KeyC') {
+          e.preventDefault();
+          handleToggleFollowRocket();
+          return;
+        }
       }
 
       if (sim.gameState === 'playing' && sim.phase === 'aiming') {
@@ -1067,13 +1293,43 @@ export default function App() {
     };
   }, [
     handleLaunchRocket,
+    handleResetCamera,
     handleResetMission,
     handleStartGame,
+    handleToggleCameraTool,
+    handleToggleFollowRocket,
     handleToggleMute,
     handleTogglePause,
+    handleZoomIn,
+    handleZoomOut,
   ]);
 
-  // Pointer Aiming & Sandbox Mass Dragging
+  // Wheel Zoom toward cursor
+  const handleWheel = useCallback(
+    (e: React.WheelEvent<HTMLCanvasElement>) => {
+      const sim = simRef.current;
+      if (sim.gameState !== 'playing') return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      const factor = Math.exp(-e.deltaY * 0.0014);
+      const next = zoomCameraAroundPoint(
+        { camX: sim.camX, camY: sim.camY, zoom: sim.zoom },
+        sim.zoom * factor,
+        sx,
+        sy,
+        rect.width,
+        rect.height,
+        DEFAULT_GRID_CONFIG.worldWidth,
+        DEFAULT_GRID_CONFIG.worldHeight
+      );
+      applyCameraState(next.camX, next.camY, next.zoom);
+    },
+    [applyCameraState]
+  );
+
+  // Pointer Aiming, Map Panning & Sandbox Mass Dragging
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     const sim = simRef.current;
     if (sim.gameState !== 'playing') return;
@@ -1084,16 +1340,44 @@ export default function App() {
     const worldPt = screenToWorld(sx, sy, vpRef.current);
     const mission = MISSIONS[sim.missionIndex];
 
+    // Right-drag, middle-drag, Shift+drag, Pan tool, or left-drag during active flight pans the map
+    const wantsPan =
+      e.button === 1 ||
+      e.button === 2 ||
+      e.shiftKey ||
+      sim.cameraTool === 'pan' ||
+      (e.button === 0 && sim.phase !== 'aiming' && !mission.isSandbox);
+
+    if (wantsPan) {
+      sim.dragMode = 'pan';
+      sim.panLastX = e.clientX;
+      sim.panLastY = e.clientY;
+      if (sim.followRocket) {
+        sim.followRocket = false;
+        setFollowRocket(false);
+      }
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
+
     // In Sandbox, check if pointer clicked an existing mass to drag it
     if (mission.isSandbox) {
       for (let i = sim.masses.length - 1; i >= 0; i--) {
         const m = sim.masses[i];
-        if (Math.hypot(worldPt.x - m.x, worldPt.y - m.y) <= m.radius + 18) {
+        const hitRadius = Math.max(m.radius + 18, 22 / Math.max(0.3, sim.zoom));
+        if (Math.hypot(worldPt.x - m.x, worldPt.y - m.y) <= hitRadius) {
           sim.selectedMassId = m.id;
           sim.dragMode = 'mass';
           e.currentTarget.setPointerCapture(e.pointerId);
           return;
         }
+      }
+      if (sim.phase !== 'aiming') {
+        sim.dragMode = 'pan';
+        sim.panLastX = e.clientX;
+        sim.panLastY = e.clientY;
+        e.currentTarget.setPointerCapture(e.pointerId);
+        return;
       }
     }
 
@@ -1124,19 +1408,35 @@ export default function App() {
     const sim = simRef.current;
     if (sim.dragMode === 'none') return;
 
+    if (sim.dragMode === 'pan') {
+      const dxScreen = e.clientX - sim.panLastX;
+      const dyScreen = e.clientY - sim.panLastY;
+      sim.panLastX = e.clientX;
+      sim.panLastY = e.clientY;
+      const scale = Math.max(0.05, vpRef.current.scale);
+      applyCameraState(
+        sim.camX - dxScreen / scale,
+        sim.camY - dyScreen / scale,
+        sim.zoom
+      );
+      return;
+    }
+
     const rect = e.currentTarget.getBoundingClientRect();
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
     const worldPt = screenToWorld(sx, sy, vpRef.current);
     const mission = MISSIONS[sim.missionIndex];
+    const maxMassX = UNIVERSE_CONFIG.universeWidth * 0.5 - 60;
+    const maxMassY = UNIVERSE_CONFIG.universeHeight * 0.5 - 60;
 
     if (sim.dragMode === 'mass' && sim.selectedMassId) {
       sim.masses = sim.masses.map((m) =>
         m.id === sim.selectedMassId
           ? {
               ...m,
-              x: Math.max(-720, Math.min(720, worldPt.x)),
-              y: Math.max(-440, Math.min(440, worldPt.y)),
+              x: Math.max(-maxMassX, Math.min(maxMassX, worldPt.x)),
+              y: Math.max(-maxMassY, Math.min(maxMassY, worldPt.y)),
             }
           : m
       );
@@ -1162,7 +1462,7 @@ export default function App() {
         syncTelemetryImmediate();
       }
     }
-  }, [recomputeGridAndPrediction, syncTelemetryImmediate]);
+  }, [applyCameraState, recomputeGridAndPrediction, syncTelemetryImmediate]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     if (simRef.current.dragMode !== 'none') {
@@ -1204,11 +1504,15 @@ export default function App() {
         <canvas
           ref={vectorCanvasRef}
           data-testid="game-canvas"
+          onWheel={handleWheel}
+          onContextMenu={(e) => e.preventDefault()}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerUp}
-          className="absolute inset-0 w-full h-full block cursor-crosshair touch-none"
+          className={`absolute inset-0 w-full h-full block touch-none ${
+            cameraTool === 'pan' ? 'cursor-grab active:cursor-grabbing' : 'cursor-crosshair'
+          }`}
         />
       </div>
 
@@ -1250,6 +1554,17 @@ export default function App() {
           onAddSandboxMass={handleAddSandboxMass}
           onClearSandboxMasses={handleClearSandboxMasses}
           minimapCanvasRef={minimapCanvasRef}
+          universeWidth={UNIVERSE_CONFIG.universeWidth}
+          universeHeight={UNIVERSE_CONFIG.universeHeight}
+          zoom={zoom}
+          cameraTool={cameraTool}
+          followRocket={followRocket}
+          onZoomIn={handleZoomIn}
+          onZoomOut={handleZoomOut}
+          onResetCamera={handleResetCamera}
+          onToggleCameraTool={handleToggleCameraTool}
+          onToggleFollowRocket={handleToggleFollowRocket}
+          onPanToWorld={handlePanToWorld}
         />
       )}
 

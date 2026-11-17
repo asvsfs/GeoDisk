@@ -22,13 +22,13 @@ export function TitleScreen({
     >
       {/* Top quiet spec line */}
       <div className="flex items-center justify-between text-xs font-mono text-slate-400">
-        <span>2+1D SPACETIME GEODESIC FLIGHT</span>
+        <span>3D SPACETIME GEODESIC · 2D SHADOW PROJECTION</span>
         <span>
           {gpuActive === null
             ? 'PROBING WEBGPU...'
             : gpuActive
-              ? 'WEBGPU COMPUTE · 160×100 UNIFORM GRID'
-              : 'UNIFORM GRID SOLVER · 160×100'}
+              ? 'WEBGPU COMPUTE · 80×50×13 3D GRID'
+              : '3D UNIFORM GRID · 80×50×13'}
         </span>
       </div>
 
@@ -84,7 +84,7 @@ export function TitleScreen({
               GEODESIC
             </h1>
             <p className="text-sm text-slate-400 mt-1.5">
-              2D + Time Relativistic Gravity Rocket Simulation
+              3D General Relativity Gravity · 2D Shadow Motion
             </p>
           </div>
         </div>

@@ -49,6 +49,17 @@ interface GameHudProps {
   onAddSandboxMass: (kind: 'star' | 'singularity' | 'cluster16') => void;
   onClearSandboxMasses: () => void;
   minimapCanvasRef: RefObject<HTMLCanvasElement | null>;
+  universeWidth: number;
+  universeHeight: number;
+  zoom: number;
+  cameraTool: 'aim' | 'pan';
+  followRocket: boolean;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onResetCamera: () => void;
+  onToggleCameraTool: () => void;
+  onToggleFollowRocket: () => void;
+  onPanToWorld: (wx: number, wy: number) => void;
 }
 
 export function GameHud({
@@ -78,6 +89,17 @@ export function GameHud({
   onAddSandboxMass,
   onClearSandboxMasses,
   minimapCanvasRef,
+  universeWidth,
+  universeHeight,
+  zoom,
+  cameraTool,
+  followRocket,
+  onZoomIn,
+  onZoomOut,
+  onResetCamera,
+  onToggleCameraTool,
+  onToggleFollowRocket,
+  onPanToWorld,
 }: GameHudProps) {
   const fuelPct =
     telemetry.maxFuel > 0
@@ -185,17 +207,17 @@ export function GameHud({
               type="button"
               tabIndex={-1}
               onClick={(e) => {
-                onChangePhysicsModel('gr-2plus1d');
+                onChangePhysicsModel('gr-3d');
                 e.currentTarget.blur();
               }}
               className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                physicsModelId === 'gr-2plus1d'
+                physicsModelId === 'gr-3d' || physicsModelId === 'gr-2plus1d'
                   ? 'bg-slate-800 text-amber-300'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
-              title="2+1D General Relativity Geodesic Module"
+              title="3D 1PN General Relativity Geodesic Module (2D Shadow Render)"
             >
-              GR 2+1D
+              GR 3D
             </button>
             <button
               type="button"
@@ -284,6 +306,17 @@ export function GameHud({
             rocketOffscreen={telemetry.rocketOffscreen}
             offscreenMassCount={telemetry.offscreenMassCount}
             escapedCount={telemetry.escapedCount}
+            universeWidth={universeWidth}
+            universeHeight={universeHeight}
+            zoom={zoom}
+            cameraTool={cameraTool}
+            followRocket={followRocket}
+            onZoomIn={onZoomIn}
+            onZoomOut={onZoomOut}
+            onResetCamera={onResetCamera}
+            onToggleCameraTool={onToggleCameraTool}
+            onToggleFollowRocket={onToggleFollowRocket}
+            onPanToWorld={onPanToWorld}
           />
 
           {isSandbox && (
