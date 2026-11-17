@@ -46,6 +46,122 @@ export interface FieldSolver {
   build(bodies: readonly Body[]): void;
   /** Writes the field at (x, y, z) into `out` and returns it. */
   sample(x: number, y: number, z: number, out: FieldSample): FieldSample;
+  /**
+   * Adds the strong-field correction of compact bodies (black holes, neutron
+   * stars, white dwarfs) for a test particle at (x, y, z) moving at
+   * (vx, vy, vz) to `out`. See `CompactSet`.
+   */
+  addStrong(
+    x: number,
+    y: number,
+    z: number,
+    vx: number,
+    vy: number,
+    vz: number,
+    out: Accel,
+  ): void;
+}
+
+/** An acceleration vector. */
+export interface Accel {
+  ax: number;
+  ay: number;
+  az: number;
+}
+
+/** True for bodies compact enough that orbits near them feel strong gravity. */
+function isCompact(b: Body): boolean {
+  return b.kind === 'hole' || b.kind === 'compact' || b.kind === 'white';
+}
+
+/**
+ * Packs compact bodies for the Schwarzschild correction to a test particle's
+ * acceleration, per body, in that body's rest frame:
+ *
+ *   da = -(mu / r^2) * 3 L^2 / (c^2 r^2) * r_hat,   L = |r x v_rel|
+ *
+ * This is the exact radial equation of a Schwarzschild geodesic in proper
+ * time added to Newtonian gravity. It precesses orbits, gives the innermost
+ * stable orbit at 6 mu / c^2 and makes anything that gets close plunge in.
+ * Using the body's own velocity keeps it frame-independent, so a moving
+ * black hole pulls exactly as a still one does.
+ */
+class CompactSet {
+  private x = new Float64Array(8);
+  private y = new Float64Array(8);
+  private z = new Float64Array(8);
+  private vx = new Float64Array(8);
+  private vy = new Float64Array(8);
+  private vz = new Float64Array(8);
+  private mu = new Float64Array(8);
+  private soft2 = new Float64Array(8);
+  private n = 0;
+
+  constructor(private readonly invC2: number) {}
+
+  build(bodies: readonly Body[]): void {
+    this.n = 0;
+    for (const b of bodies) {
+      if (!isCompact(b)) continue;
+      if (this.n === this.x.length) this.grow();
+      const i = this.n++;
+      this.x[i] = b.x;
+      this.y[i] = b.y;
+      this.z[i] = b.z;
+      this.vx[i] = b.vx;
+      this.vy[i] = b.vy;
+      this.vz[i] = b.vz;
+      this.mu[i] = b.mu;
+      this.soft2[i] = b.soft * b.soft;
+    }
+  }
+
+  add(
+    px: number,
+    py: number,
+    pz: number,
+    vx: number,
+    vy: number,
+    vz: number,
+    out: Accel,
+  ): void {
+    for (let i = 0; i < this.n; i++) {
+      const dx = px - this.x[i];
+      const dy = py - this.y[i];
+      const dz = pz - this.z[i];
+      const ux = vx - this.vx[i];
+      const uy = vy - this.vy[i];
+      const uz = vz - this.vz[i];
+      const lx = dy * uz - dz * uy;
+      const ly = dz * ux - dx * uz;
+      const lz = dx * uy - dy * ux;
+      const l2 = lx * lx + ly * ly + lz * lz;
+      const r2 = dx * dx + dy * dy + dz * dz + this.soft2[i];
+      const invR = 1 / Math.sqrt(r2);
+      // mu / r^3 (for the vector form) times 3 L^2 / (c^2 r^2).
+      const f = (this.mu[i] * invR * invR * invR * 3 * l2 * this.invC2) / r2;
+      out.ax -= dx * f;
+      out.ay -= dy * f;
+      out.az -= dz * f;
+    }
+  }
+
+  private grow(): void {
+    const size = this.x.length * 2;
+    const grow = (a: Float64Array) => {
+      const next = new Float64Array(size);
+      next.set(a);
+      return next;
+    };
+    this.x = grow(this.x);
+    this.y = grow(this.y);
+    this.z = grow(this.z);
+    this.vx = grow(this.vx);
+    this.vy = grow(this.vy);
+    this.vz = grow(this.vz);
+    this.mu = grow(this.mu);
+    this.soft2 = grow(this.soft2);
+  }
 }
 
 /** Packs spinning bodies so B-field evaluation skips the rest. */
@@ -113,9 +229,23 @@ export class DirectSolver implements FieldSolver {
   private soft2 = new Float64Array(0);
   private n = 0;
   private readonly spins: SpinSet;
+  private readonly compacts: CompactSet;
 
   constructor(c: number) {
     this.spins = new SpinSet(1 / (c * c));
+    this.compacts = new CompactSet(1 / (c * c));
+  }
+
+  addStrong(
+    x: number,
+    y: number,
+    z: number,
+    vx: number,
+    vy: number,
+    vz: number,
+    out: Accel,
+  ): void {
+    this.compacts.add(x, y, z, vx, vy, vz, out);
   }
 
   build(bodies: readonly Body[]): void {
@@ -138,6 +268,7 @@ export class DirectSolver implements FieldSolver {
     }
     this.n = n;
     this.spins.build(bodies);
+    this.compacts.build(bodies);
   }
 
   sample(px: number, py: number, pz: number, out: FieldSample): FieldSample {
@@ -204,15 +335,30 @@ export class TreeSolver implements FieldSolver {
   private readonly stack = new Int32Array(MAX_DEPTH * 8 + 8);
   private readonly invTheta: number;
   private readonly spins: SpinSet;
+  private readonly compacts: CompactSet;
 
   constructor(c: number, theta: number) {
     this.invTheta = 1 / theta;
     this.spins = new SpinSet(1 / (c * c));
+    this.compacts = new CompactSet(1 / (c * c));
+  }
+
+  addStrong(
+    x: number,
+    y: number,
+    z: number,
+    vx: number,
+    vy: number,
+    vz: number,
+    out: Accel,
+  ): void {
+    this.compacts.add(x, y, z, vx, vy, vz, out);
   }
 
   build(bodies: readonly Body[]): void {
     this.bodies = bodies;
     this.spins.build(bodies);
+    this.compacts.build(bodies);
     this.ensure(Math.max(64, bodies.length * 16 + 1));
     let minX = Infinity;
     let minY = Infinity;
@@ -476,5 +622,17 @@ export class AutoSolver implements FieldSolver {
 
   sample(x: number, y: number, z: number, out: FieldSample): FieldSample {
     return this.active.sample(x, y, z, out);
+  }
+
+  addStrong(
+    x: number,
+    y: number,
+    z: number,
+    vx: number,
+    vy: number,
+    vz: number,
+    out: Accel,
+  ): void {
+    this.active.addStrong(x, y, z, vx, vy, vz, out);
   }
 }

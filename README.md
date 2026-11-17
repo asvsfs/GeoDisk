@@ -103,7 +103,9 @@ add or reorder a system there:
 1. **BodyMotion**: mutual N-body gravity with velocity Verlet. Builds the
    gravity field and the spatial hash once per step.
 2. **SatMotion**: moves satellites through that field with a pluggable
-   `SatModel` (1PN relativistic geodesic by default, Newtonian available).
+   `SatModel` (Schwarzschild geodesic in proper time by default: full Newtonian
+   gravity plus a per-body strong-field term near black holes, neutron stars and
+   white dwarfs, so orbits precess and close passes plunge in; Newtonian available).
    A satellite that hits a body is absorbed by it.
 3. **Collisions**: spatial-hash broad phase, then merge or shatter. The
    outcome depends on impact speed relative to mutual escape speed (see
