@@ -298,6 +298,9 @@ export function GameView({client, offline, onLeave}: GameViewProps) {
           case EventKind.CRASH:
             if (e.ref === client.you) sfx.crash();
             break;
+          case EventKind.ESCAPE:
+            if (e.size > 0) toast('A body escaped the universe', 'info');
+            break;
           default:
             break;
         }

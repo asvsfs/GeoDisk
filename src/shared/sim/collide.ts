@@ -18,11 +18,16 @@
  * off fragments (fission); a black hole's spin is capped at the Kerr limit.
  * Ordinary matter conserves volume, so density survives mergers and is
  * inherited by fragments. With no free body slots, a shatter becomes a merge.
+ *
+ * Anchored bodies always survive a contact. A permanent body absorbs whatever
+ * touches it without changing, and that mass leaves the universe. Two anchored
+ * bodies pass through each other.
  */
 
 import {EventKind, type Body} from '../types';
 import {
   clampRadius,
+  isAnchored,
   isDegenerate,
   isDense,
   maxSpin,
@@ -112,7 +117,10 @@ function resolve(world: World, a: Body, b: Body): Body | null {
   if (!closing && !deep) return null;
 
   // An anchored body always survives a contact, whatever its mass.
-  const big = a.fixed || (!b.fixed && a.mu >= b.mu) ? a : b;
+  const anchoredA = isAnchored(a);
+  const anchoredB = isAnchored(b);
+  if (anchoredA && anchoredB) return null;
+  const big = anchoredA || (!anchoredB && a.mu >= b.mu) ? a : b;
   const small = big === a ? b : a;
   const total = a.mu + b.mu;
   const vEsc = Math.sqrt((2 * total) / (a.radius + b.radius));
@@ -120,7 +128,7 @@ function resolve(world: World, a: Body, b: Body): Body | null {
   const cfg = world.cfg.physics;
 
   if (
-    big.fixed ||
+    isAnchored(big) ||
     isDense(big.kind) ||
     isDense(small.kind) ||
     q < cfg.mergeRatio
@@ -157,6 +165,11 @@ function orbitalSpin(a: Body, b: Body): number {
 
 /** Folds `small` into `big`, conserving mass, momentum and angular momentum. */
 function merge(world: World, big: Body, small: Body): void {
+  if (big.permanent) {
+    world.lostMu += small.mu;
+    world.emit(EventKind.MERGE, small.x, small.y, small.z, small.mu);
+    return;
+  }
   const cfg = world.cfg.physics;
   const total = big.mu + small.mu;
   const spin = big.spin + small.spin + orbitalSpin(big, small);
@@ -233,7 +246,7 @@ export function limitSpin(world: World, b: Body): void {
   if (excess <= 1) return;
   if (
     b.kind !== 'hole' &&
-    !b.fixed &&
+    !isAnchored(b) &&
     excess >= world.cfg.physics.fissionSpin &&
     fission(world, b)
   ) {

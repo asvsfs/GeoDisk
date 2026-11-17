@@ -38,6 +38,34 @@ export interface PredictOptions {
 }
 
 /**
+ * Copies a body for the preview. Snapshots don't carry `orbit`, so a
+ * permanent body gets its circular orbit back from its position and velocity
+ * around the heaviest anchored body (the origin when there is none). The
+ * preview world starts at time 0, so the phase is the current angle.
+ */
+function withRails(b: Body, all: readonly Body[]): Body {
+  const copy = {...b};
+  if (!b.permanent || b.orbit) return copy;
+  let core: Body | undefined;
+  for (const o of all) if (o.fixed && (!core || o.mu > core.mu)) core = o;
+  const cx = core?.x ?? 0;
+  const cy = core?.y ?? 0;
+  const dx = b.x - cx;
+  const dy = b.y - cy;
+  const r2 = dx * dx + dy * dy;
+  if (r2 < 1) return copy;
+  copy.orbit = {
+    cx,
+    cy,
+    cz: b.z,
+    r: Math.sqrt(r2),
+    w: (dx * b.vy - dy * b.vx) / r2,
+    phase: Math.atan2(dy, dx),
+  };
+  return copy;
+}
+
+/**
  * Simulates one satellite through a private copy of `bodies`. Stops early on
  * a crash. Returns an empty path if the home body is gone.
  */
@@ -51,7 +79,7 @@ export function predictPath(
   const coarse = {...cfg, world: {...cfg.world, dt: cfg.world.dt * 2}};
   const dt = coarse.world.dt;
   const world = new World(coarse, [new BodyMotion(), new SatMotion()], 1);
-  world.bodies = bodies.map(b => ({...b}));
+  world.bodies = bodies.map(b => withRails(b, bodies));
   const leadSteps = Math.round(Math.max(0, opts.lead ?? 0) / dt);
   for (let i = 0; i < leadSteps; i++) world.step();
   const home = world.body(shot.home);

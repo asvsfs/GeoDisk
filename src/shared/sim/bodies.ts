@@ -9,7 +9,7 @@
  */
 
 import type {PhysicsConfig} from '../config';
-import type {Body, BodyKind} from '../types';
+import type {Body, BodyKind, Orbit} from '../types';
 
 /** Rank used when two bodies merge: the denser kind wins. */
 const KIND_RANK: Record<BodyKind, number> = {
@@ -30,12 +30,18 @@ const RADIUS_K: Record<'rock' | 'planet' | 'star', number> = {
 
 export const MIN_RADIUS = 2;
 export const MAX_RADIUS = 96;
+/** Largest black hole horizon (holes past about 1e8 mu stop growing). */
+export const MAX_HOLE_RADIUS = 240;
 /** White dwarf radius at mu = 2e6; scales as mu^(-1/3). */
 const DWARF_R = 6;
 /** Neutron star radius (roughly constant with mass). */
 const NEUTRON_R = 3.5;
-/** Horizon radius per unit mu: 0.1 x Schwarzschild 2 mu / c^2 at c = 900. */
-const HOLE_K = 2.45e-7;
+/**
+ * Horizon radius per unit mu: the Schwarzschild radius 2 mu / c^2 at c = 900.
+ * (It used to be a tenth of that. Holes that dense flung anything passing
+ * close out at several times c.)
+ */
+const HOLE_K = 2 / (900 * 900);
 
 /** True for objects whose size is fixed by degeneracy or the horizon. */
 export function isDegenerate(kind: BodyKind): boolean {
@@ -54,8 +60,7 @@ export function radiusFor(kind: BodyKind, mu: number): number {
       r = NEUTRON_R;
       break;
     case 'hole':
-      r = HOLE_K * m;
-      break;
+      return Math.min(MAX_HOLE_RADIUS, Math.max(MIN_RADIUS, HOLE_K * m));
     default:
       r = RADIUS_K[kind] * Math.cbrt(m);
   }
@@ -65,6 +70,11 @@ export function radiusFor(kind: BodyKind, mu: number): number {
 /** Clamps a radius to the renderable range. */
 export function clampRadius(r: number): number {
   return Math.min(MAX_RADIUS, Math.max(MIN_RADIUS, r));
+}
+
+/** True for bodies that never move freely or disappear (anchored or permanent). */
+export function isAnchored(b: Pick<Body, 'fixed' | 'permanent'>): boolean {
+  return b.fixed || b.permanent;
 }
 
 /** Gravitational softening for a body of `kind` with collision radius `r`. */
@@ -160,6 +170,8 @@ export interface BodyInit {
   spin?: number;
   life?: number;
   fixed?: boolean;
+  permanent?: boolean;
+  orbit?: Orbit;
 }
 
 /** Builds a body with derived kind, softening and life. */
@@ -188,6 +200,8 @@ export function makeBody(id: number, init: BodyInit, cfg: PhysicsConfig): Body {
     spin: init.spin ?? 0,
     life: init.life ?? (kind === 'star' ? starLifeFor(init.mu, cfg) : Infinity),
     fixed: init.fixed ?? false,
+    permanent: init.permanent ?? false,
+    ...(init.orbit ? {orbit: init.orbit} : {}),
   };
 }
 
@@ -198,6 +212,7 @@ export function makeBody(id: number, init: BodyInit, cfg: PhysicsConfig): Body {
  */
 export function refreshBody(b: Body, cfg: PhysicsConfig): BodyKind {
   const before = b.kind;
+  if (b.permanent) return before;
   b.kind = kindFor(b.kind, b.mu, cfg);
   if (isDegenerate(b.kind) || (b.kind === 'star' && before !== 'star')) {
     b.radius = radiusFor(b.kind, b.mu);

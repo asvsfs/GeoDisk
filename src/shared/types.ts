@@ -49,6 +49,27 @@ export interface Body {
   life: number;
   /** Anchored bodies pull and absorb but never move (e.g. a galactic core). */
   fixed: boolean;
+  /**
+   * Permanent bodies never merge away, shatter, escape or change kind, mass
+   * or radius. Whatever touches one is absorbed and its mass leaves the
+   * universe.
+   */
+  permanent: boolean;
+  /** A fixed circular orbit the body follows on rails (server only). */
+  orbit?: Orbit;
+}
+
+/** A circular orbit in the plane z = cz, followed exactly (on rails). */
+export interface Orbit {
+  cx: number;
+  cy: number;
+  cz: number;
+  /** Orbit radius. */
+  r: number;
+  /** Angular speed in radians per second (positive is counterclockwise). */
+  w: number;
+  /** Angle at world time 0. */
+  phase: number;
 }
 
 /** A satellite: a massless test particle owned by a player. */
@@ -85,7 +106,7 @@ export enum EventKind {
   SHATTER = 1,
   NOVA = 2,
   CRASH = 3,
-  /** Unused since the universe became closed; kept for wire compatibility. */
+  /** A body or satellite left the universe on an escape trajectory. */
   ESCAPE = 4,
   LAUNCH = 5,
   SPAWN = 6,

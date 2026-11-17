@@ -1,17 +1,32 @@
 /**
  * @fileoverview The initial universe. It is seeded once; afterwards nothing
- * is added except by players, and nothing is removed.
+ * is added except by players.
  */
 
 import {breakupSpin, kerrSpin, radiusFor} from './bodies';
+import {onRails} from './motion';
 import type {World} from './world';
 
 /** Mass of the cluster's central black hole. */
 const CORE_MU = 2.5e7;
 /** Distance of the six outer systems from the centre. */
-const RING = 2300;
+const RING = 2600;
 /** Fraction of circular speed the outer systems start with. */
-const SWIRL = 0.6;
+const SWIRL = 0.9;
+/**
+ * Permanent planets on rails around the core: orbit radius, mass and whether
+ * it is a gas giant. The innermost stable orbit is 6 mu / c^2 (about 185).
+ */
+const PERMANENT_PLANETS: ReadonlyArray<{
+  r: number;
+  mu: number;
+  giant: boolean;
+}> = [
+  {r: 520, mu: 1.2e5, giant: false},
+  {r: 820, mu: 2e5, giant: true},
+  {r: 1150, mu: 9e4, giant: false},
+  {r: 1550, mu: 2.6e5, giant: true},
+];
 /** Gas giants are this many times larger than a rocky planet of equal mass. */
 const GIANT_SCALE = 2.3;
 
@@ -22,11 +37,12 @@ interface SystemSpec {
 }
 
 /**
- * A loose star cluster: a spinning intermediate-mass black hole at the
- * centre, surrounded by star systems of every class plus a white dwarf and a
- * pulsar. Nothing is anchored. The systems start on slow, sub-circular
- * orbits, so the cluster contracts and encounters build over minutes; the
- * supergiant burns out first. The universe's walls keep everything in.
+ * A loose star cluster around a spinning intermediate-mass black hole,
+ * anchored at the centre. Four permanent planets circle it on rails: they
+ * are the default homes, and anything that hits one is absorbed. Further
+ * out, star systems of every class plus a white dwarf and a pulsar start on
+ * slightly sub-circular orbits, so encounters build over minutes; the
+ * supergiant burns out first.
  */
 export function seedWorld(world: World): void {
   const c = world.cfg.world.c;
@@ -36,7 +52,9 @@ export function seedWorld(world: World): void {
     y: 0,
     mu: CORE_MU,
     spin: 0.5 * kerrSpin(CORE_MU, c),
+    fixed: true,
   });
+  addPermanentPlanets(world, CORE_MU, c);
   const turn = world.rng.range(0, Math.PI * 2);
   const at = (k: number) => {
     const a = turn + (k * Math.PI) / 3 + world.rng.range(-0.15, 0.15);
@@ -57,6 +75,31 @@ export function seedWorld(world: World): void {
   orbiter(world, 'white', 2.4e6, dwarf.x, dwarf.y, 0.1);
   const pulsar = at(5);
   orbiter(world, 'compact', 4e6, pulsar.x, pulsar.y, 0.6);
+}
+
+/**
+ * Puts the permanent planets on circular orbits around a core of `mu` at the
+ * origin, prograde with its spin and at evenly spread starting angles. The
+ * speed is the circular speed of the satellite model (Newton plus the
+ * Schwarzschild term), v^2 = (mu / r) / (1 - 3 mu / (r c^2)), so a satellite
+ * dropped from one moves with it.
+ */
+function addPermanentPlanets(world: World, mu: number, c: number): void {
+  const turn = world.rng.range(0, Math.PI * 2);
+  PERMANENT_PLANETS.forEach((p, k) => {
+    const v2 = mu / p.r / (1 - (3 * mu) / (p.r * c * c));
+    const phase = turn + (k * 2 * Math.PI) / PERMANENT_PLANETS.length;
+    const planet = world.addBody({
+      kind: 'planet',
+      x: Math.cos(phase) * p.r,
+      y: Math.sin(phase) * p.r,
+      mu: p.mu,
+      radius: radiusFor('planet', p.mu) * (p.giant ? GIANT_SCALE : 1),
+      permanent: true,
+      orbit: {cx: 0, cy: 0, cz: 0, r: p.r, w: Math.sqrt(v2) / p.r, phase},
+    });
+    if (planet) onRails(planet, world.time);
+  });
 }
 
 /**

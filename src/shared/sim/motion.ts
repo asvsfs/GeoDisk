@@ -2,7 +2,7 @@
  * @fileoverview Motion systems for bodies (N-body) and satellites.
  */
 
-import {EventKind} from '../types';
+import {EventKind, type Body} from '../types';
 import {newSample} from './gravity';
 import {GeodesicModel, type SatModel} from './sat_model';
 import type {System, World} from './world';
@@ -11,8 +11,9 @@ const MAX_BODY_BETA = 0.82;
 
 /**
  * Mutual N-body gravity with velocity Verlet: one field build and one
- * evaluation per body per step. Leaves `world.field` and `world.hash` built
- * at the new positions for later systems.
+ * evaluation per body per step. Anchored bodies stay put and bodies with an
+ * `orbit` follow it exactly. Leaves `world.field` and `world.hash` built at
+ * the new positions for later systems.
  */
 export class BodyMotion implements System {
   readonly name = 'body-motion';
@@ -21,7 +22,12 @@ export class BodyMotion implements System {
   run(world: World, dt: number): void {
     const bodies = world.bodies;
     const half = dt * dt * 0.5;
+    const t = world.time + dt;
     for (const b of bodies) {
+      if (b.orbit) {
+        onRails(b, t);
+        continue;
+      }
       if (b.fixed) continue;
       b.x += b.vx * dt + b.ax * half;
       b.y += b.vy * dt + b.ay * half;
@@ -31,7 +37,7 @@ export class BodyMotion implements System {
     world.hash.build(bodies);
     const max = world.cfg.world.c * MAX_BODY_BETA;
     for (const b of bodies) {
-      if (b.fixed) continue;
+      if (b.fixed || b.orbit) continue;
       world.field.sample(b.x, b.y, b.z, this.f);
       let vx = b.vx + (b.ax + this.f.gx) * dt * 0.5;
       let vy = b.vy + (b.ay + this.f.gy) * dt * 0.5;
@@ -53,9 +59,26 @@ export class BodyMotion implements System {
   }
 }
 
+/** Places a body on its circular orbit at world time `t`. */
+export function onRails(b: Body, t: number): void {
+  const o = b.orbit!;
+  const a = o.phase + o.w * t;
+  const cos = Math.cos(a);
+  const sin = Math.sin(a);
+  b.x = o.cx + o.r * cos;
+  b.y = o.cy + o.r * sin;
+  b.z = o.cz;
+  b.vx = -o.r * o.w * sin;
+  b.vy = o.r * o.w * cos;
+  b.vz = 0;
+  b.ax = 0;
+  b.ay = 0;
+  b.az = 0;
+}
+
 /**
  * Moves satellites with a pluggable `SatModel`. A satellite that hits a body
- * is absorbed by it (its mass is negligible); walls keep the rest inside.
+ * is absorbed by it (its mass is negligible).
  */
 export class SatMotion implements System {
   readonly name = 'sat-motion';
