@@ -7,12 +7,13 @@ import {DirectSolver, TreeSolver, newSample} from './gravity';
 import {BodyMotion, SatMotion} from './motion';
 import {defaultSystems} from './pipeline';
 import {Rng} from './rng';
-import {breakupSpin} from './bodies';
+import {MAX_HOLE_RADIUS, breakupSpin, radiusFor} from './bodies';
+import {pickHome} from '../game/rules';
 import {classify} from './classes';
 import {createWorld} from './pipeline';
 import {predictPath} from './predict';
 import {StellarEvolution, supernova} from './stars';
-import {Walls} from './walls';
+import {Escape} from './escape';
 import {World, type System} from './world';
 
 function world(
@@ -313,25 +314,109 @@ test('ejecta never exceed the body cap; the rest falls back', () => {
   assert.ok(Math.abs(totalMass(w) - 1e7) < 1e-3, 'mass conserved');
 });
 
-test('satellites crash into bodies; walls keep everything inside', () => {
-  const w = world([new BodyMotion(), new SatMotion(), new Walls()]);
+test('satellites crash into bodies', () => {
+  const w = world([new BodyMotion(), new SatMotion()]);
   w.addBody({kind: 'planet', x: 100, y: 0, mu: 1e5});
-  const rogue = w.addBody({kind: 'rock', x: 3990, y: 0, vx: 800, mu: 1e3})!;
   w.sats.push(sat(1, 3, 80, 0, 600));
-  w.sats.push(sat(2, 4, 3995, 2000, 800));
+  w.sats.push(sat(2, 4, 3000, 2000, 0));
   for (let i = 0; i < 10; i++) w.step();
   assert.equal(w.sats.length, 1);
   assert.ok(w.events.some(e => e.kind === EventKind.CRASH && e.ref === 3));
-  assert.ok(w.sats[0].vx < 0, 'satellite bounced');
-  assert.ok(w.bodies.includes(rogue) && rogue.vx < 0, 'body bounced');
-  assert.ok(Math.abs(rogue.x) <= 4000);
 });
 
-test('the seeded universe never spawns or loses mass on its own', () => {
+test('objects past the bounds escape unless gravity can bring them back', () => {
+  const w = world([new BodyMotion(), new SatMotion(), new Escape()]);
+  const hw = DEFAULT_CONFIG.world.width / 2;
+  w.addBody({kind: 'hole', x: 0, y: 0, mu: 2.5e7, fixed: true});
+  // Unbound: fast and heading out.
+  const rogue = w.addBody({kind: 'rock', x: hw + 5, y: 0, vx: 800, mu: 1e3})!;
+  w.sats.push({...sat(1, 7, hw + 5, 0, 800), y: 300});
+  // Bound: just outside and slow, so the hole pulls it back.
+  w.sats.push(sat(2, 8, hw + 5, 0, 20));
+  // Bound but far beyond the hard limit.
+  w.sats.push(sat(3, 9, hw * DEFAULT_CONFIG.physics.escapeLimit + 50, 0, 0));
+  // Anchored bodies never leave.
+  const anchor = w.addBody({kind: 'planet', x: hw + 50, y: -900, mu: 1e4})!;
+  anchor.fixed = true;
+  w.step();
+  assert.ok(!w.bodies.includes(rogue), 'unbound body escaped');
+  assert.equal(w.lostMu, 1e3);
+  assert.ok(w.bodies.includes(anchor), 'anchored body stays');
+  assert.deepEqual(
+    w.sats.map(s => s.id),
+    [2],
+    'only the bound satellite inside the limit remains',
+  );
+  const escapes = w.events.filter(e => e.kind === EventKind.ESCAPE);
+  assert.equal(escapes.length, 3);
+  // Pulled back at about mu / r^2 = 0.7: it turns around and re-enters in ~1 min.
+  for (let i = 0; i < 60 * 70; i++) w.step();
+  assert.equal(w.sats.length, 1);
+  assert.ok(Math.abs(w.sats[0].x) < hw, 'bound satellite fell back inside');
+});
+
+test('permanent planets stay on their orbits and absorb what hits them', () => {
+  const w = world([new BodyMotion(), new Collisions()]);
+  const r = 600;
+  const om = 0.3;
+  const p = w.addBody({
+    kind: 'planet',
+    x: r,
+    y: 0,
+    mu: 1e5,
+    permanent: true,
+    orbit: {cx: 0, cy: 0, cz: 0, r, w: om, phase: 0},
+  })!;
+  // A star dropped right on it would normally swallow a planet.
+  const t1 = (1 / 60) * 1;
+  w.addBody({
+    kind: 'star',
+    x: r * Math.cos(om * t1),
+    y: r * Math.sin(om * t1),
+    mu: 5e6,
+  });
+  w.step();
+  assert.equal(w.bodies.length, 1);
+  assert.equal(w.bodies[0], p);
+  assert.equal(p.kind, 'planet');
+  assert.equal(p.mu, 1e5);
+  assert.equal(w.lostMu, 5e6);
+  for (let i = 0; i < 600; i++) w.step();
+  assert.ok(Math.abs(Math.hypot(p.x, p.y) - r) < 1e-6, 'still on its orbit');
+  const a = om * w.time;
+  assert.ok(Math.abs(p.x - r * Math.cos(a)) < 1e-6);
+});
+
+test('the seeded core is anchored and four permanent planets circle it', () => {
+  const w = createWorld(DEFAULT_CONFIG, 3);
+  const core = w.bodies.find(b => b.kind === 'hole')!;
+  const perm = w.bodies.filter(b => b.permanent);
+  assert.ok(core.fixed);
+  assert.equal(perm.length, 4);
+  const radii = perm.map(b => Math.hypot(b.x, b.y));
+  for (let i = 0; i < 60 * 30; i++) w.step();
+  assert.equal(core.x, 0);
+  assert.equal(core.y, 0);
+  perm.forEach((b, k) => {
+    assert.ok(w.bodies.includes(b), 'permanent planet survives');
+    assert.ok(Math.abs(Math.hypot(b.x, b.y) - radii[k]) < 1e-6);
+  });
+  const player = {id: 1, name: 'p', color: 0, home: 0, launchAt: 0, spawnAt: 0};
+  assert.ok(w.body(pickHome(w, [player], player))!.permanent);
+});
+
+test('black hole horizons are the Schwarzschild radius', () => {
+  const c = DEFAULT_CONFIG.world.c;
+  assert.ok(Math.abs(radiusFor('hole', 2.5e7) - (2 * 2.5e7) / (c * c)) < 1e-9);
+  assert.equal(radiusFor('hole', 1e9), MAX_HOLE_RADIUS);
+});
+
+test('the seeded universe never spawns mass; every loss is accounted for', () => {
   const w = createWorld(DEFAULT_CONFIG, 7);
   const m0 = totalMass(w);
   for (let i = 0; i < 60 * 90; i++) w.step();
-  assert.ok(Math.abs(totalMass(w) - m0) / m0 < 1e-9);
+  const accounted = totalMass(w) + w.lostMu;
+  assert.ok(Math.abs(accounted - m0) / m0 < 1e-9, `${accounted} vs ${m0}`);
   assert.ok(w.bodies.length <= w.bodyCap);
 });
 
@@ -397,7 +482,8 @@ test('satellites feel full gravity near a black hole and fall in', () => {
     w.sats.push(sat(1, 1, 290, 0, v));
     w.step();
     const ax = (w.sats[0].vx - v) / DEFAULT_CONFIG.world.dt;
-    const newton = -6e7 / (290 * 290 + w.bodies[0].soft ** 2);
+    // Softened Newtonian pull: mu r / (r^2 + soft^2)^(3/2).
+    const newton = (-6e7 * 290) / (290 * 290 + w.bodies[0].soft ** 2) ** 1.5;
     assert.ok(
       ax < newton * 0.95 && ax > newton * 1.1,
       `hole moving at ${v}: a=${ax}, newton=${newton}`,
@@ -425,3 +511,56 @@ test('the Schwarzschild term only acts on moving satellites near compact bodies'
 function newBodyLike(kind: 'hole' | 'planet'): Partial<Body> {
   return {id: 1, kind, mu: 6e7, radius: 15, soft: 18, spin: 0, fixed: false};
 }
+
+test('previews from a permanent planet follow its rails like the server', () => {
+  const w = world([new BodyMotion(), new SatMotion()]);
+  w.addBody({kind: 'hole', x: 0, y: 0, mu: 2.5e7, fixed: true});
+  const r = 820;
+  // Circular speed of the satellite model, as the seeded planets use. A free
+  // Newtonian body at this speed would drift onto an ellipse.
+  const c = DEFAULT_CONFIG.world.c;
+  const om = Math.sqrt(2.5e7 / r / (1 - (3 * 2.5e7) / (r * c * c))) / r;
+  const home = w.addBody({
+    kind: 'planet',
+    x: r,
+    y: 0,
+    vy: r * om,
+    mu: 2e5,
+    permanent: true,
+    orbit: {cx: 0, cy: 0, cz: 0, r, w: om, phase: 0},
+  })!;
+  // Snapshots carry no orbit; the preview rebuilds it.
+  const snapshot = w.bodies.map(b => {
+    const {orbit: _orbit, ...rest} = b;
+    return rest;
+  });
+  const lead = 1.5;
+  // Aim outward from the planet's position at launch, so it clears the planet.
+  const angle = om * lead + 0.3;
+  const shot = {home: home.id, angle, pitch: 0, speed: 250};
+  const path = predictPath(DEFAULT_CONFIG, snapshot, shot, {seconds: 2, lead});
+  // Server: advance by the lead, then launch the same shot.
+  for (let i = 0; i < Math.round(lead * 60); i++) w.step();
+  const k = home.radius + 3;
+  w.sats.push({
+    id: 9,
+    owner: 1,
+    x: home.x + Math.cos(angle) * k,
+    y: home.y + Math.sin(angle) * k,
+    z: 0,
+    vx: home.vx + Math.cos(angle) * 250,
+    vy: home.vy + Math.sin(angle) * 250,
+    vz: 0,
+    age: 0,
+  });
+  for (let i = 0; i < 120; i++) w.step();
+  assert.equal(path.length, 60, 'preview did not crash');
+  assert.equal(w.sats.length, 1, 'server satellite did not crash');
+  const end = path[path.length - 1];
+  const s = w.sats[0];
+  // About 7 units from the preview's coarser step; 22 without the rebuilt rails.
+  assert.ok(
+    Math.hypot(end.x - s.x, end.y - s.y) < 12,
+    `preview ${end.x},${end.y} vs server ${s.x},${s.y}`,
+  );
+});

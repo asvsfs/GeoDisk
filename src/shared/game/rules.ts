@@ -203,9 +203,10 @@ export function spawn(
 }
 
 /**
- * Picks a home for `player`: the planet with the fewest residents (heavier
- * first), else the heaviest asteroid. Never creates a body; returns 0 when
- * there is nothing to launch from.
+ * Picks a home for `player`: a permanent planet if there is one, else the
+ * planet with the fewest residents (heavier first), else the heaviest
+ * asteroid. Among permanent planets, the one with the fewest residents wins.
+ * Never creates a body; returns 0 when there is nothing to launch from.
  */
 export function pickHome(
   world: World,
@@ -222,7 +223,7 @@ export function pickHome(
   let bestScore = Infinity;
   for (const b of world.bodies) {
     if (!isLaunchPad(b)) continue;
-    const tier = b.kind === 'planet' ? 0 : 1e12;
+    const tier = b.permanent ? -1e12 : b.kind === 'planet' ? 0 : 1e12;
     const score = tier + (residents.get(b.id) ?? 0) * 1e9 - b.mu;
     if (score < bestScore) {
       best = b;

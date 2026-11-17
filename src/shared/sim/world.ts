@@ -42,6 +42,11 @@ export class World {
    * replacements (remnants, fragments) may be created before compaction.
    */
   pendingFree = 0;
+  /**
+   * Mass that has left the universe: bodies that escaped and bodies absorbed
+   * by permanent ones. Bodies plus this always equal what was ever added.
+   */
+  lostMu = 0;
   private nextId = 1;
 
   constructor(

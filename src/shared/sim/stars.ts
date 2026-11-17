@@ -17,7 +17,7 @@
  */
 
 import {EventKind, type Body} from '../types';
-import {radiusFor, refreshBody, softFor} from './bodies';
+import {isAnchored, radiusFor, refreshBody, softFor} from './bodies';
 import {limitSpin} from './collide';
 import {eject} from './debris';
 import type {System, World} from './world';
@@ -244,7 +244,7 @@ function blast(
     o.vz += dz * dv * 0.5;
   };
   for (const b of world.bodies) {
-    if (b === source || b.fixed) continue;
+    if (b === source || isAnchored(b)) continue;
     push(b, Math.min(1, refMu / Math.max(b.mu, 1)));
   }
   for (const s of world.sats) push(s, 1);

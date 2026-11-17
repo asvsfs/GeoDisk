@@ -3,9 +3,10 @@
 A shared, multiplayer relativistic gravity sandbox. Anyone can join the
 universe, launch satellites from a home planet, and place their own planets,
 stars, white dwarfs, neutron stars or black holes with the mass and radius
-they choose. Nothing is spawned or deleted automatically. Bodies only merge,
-shatter, collapse or explode into pieces, following physical rules, and mass
-is conserved exactly.
+they choose. Nothing is spawned automatically. Bodies merge, shatter,
+collapse or explode into pieces following physical rules, and leave only by
+escaping: anything past the edge of the universe that gravity can no longer
+bring back is gone. Mass is conserved exactly, and what leaves is tracked.
 
 ## Run it
 
@@ -111,14 +112,30 @@ add or reorder a system there:
    outcome depends on impact speed relative to mutual escape speed (see
    below).
 4. **StellarEvolution**: stars burn fuel and die according to their mass.
-5. **Walls**: the universe is closed. Bodies and satellites bounce off its
-   edges (losing a little energy, never mass).
+5. **Escape**: the universe is open. A body or satellite past its bounds
+   escapes when its energy E = v²/2 + φ (φ from every other body) is not
+   negative, so nothing left can pull it back. A bound object may swing out
+   and fall back in, but past `escapeLimit` (1.6) times the half-size it is
+   removed anyway. Anchored bodies never escape.
 
-Nothing in the pipeline creates or deletes mass. The universe is seeded once
-(`sim/scenario.ts`): a loose cluster around a spinning intermediate-mass
-black hole, with a red dwarf, yellow dwarf, blue giant and supergiant,
-rocky and gas-giant planets, a white dwarf and a pulsar. After that, only
-players add bodies.
+Nothing in the pipeline creates mass. Mass leaves only by escaping or by
+hitting a permanent planet, and `World.lostMu` counts it, so bodies plus
+`lostMu` always equal everything ever added.
+
+The universe is seeded once (`sim/scenario.ts`). A spinning
+intermediate-mass black hole is anchored at the centre. Four **permanent
+planets** circle it on rails, from 520 to 1550 units out (the innermost
+stable orbit is about 185). They never merge away, shatter, escape or
+change, anything that touches one is absorbed, and they are where new
+players live. Further out, a loose cluster on slightly sub-circular orbits
+holds a red dwarf, yellow dwarf, blue giant and supergiant with their
+planets, a white dwarf and a pulsar. After that, only players add bodies.
+
+**Scale.** The universe is 12000 × 9000 × 3000 units with c = 900. Launches
+range from 40 to 360 units/s, comparable to orbital speeds around the core
+(about 130 to 240 at the permanent planets) and to escape speed, so gravity
+shapes every path. A black hole's horizon is its Schwarzschild radius
+2μ/c² (62 units for the core), so even a grazing pass tops out near c.
 
 **Classes** (`sim/classes.ts`) are derived from kind, mass, radius, spin and
 speed, never sent on the wire, so server and clients always agree:
@@ -139,6 +156,7 @@ momentum: the pair's orbital angular momentum becomes spin, so a grazing
 impact spins the product up. Ordinary matter conserves volume (density is
 kept, and fragments inherit it). Stars engulf lighter dead stars; a heavier
 dead star accretes its partner; anything that touches a black hole joins it.
+Anchored bodies (the core) and permanent planets always survive a contact.
 Planets merge when slow and shatter when fast, throwing fragments out in
 momentum-neutral pairs. A body spun past `fissionSpin` × breakup flings off
 equatorial fragments, and black-hole spin is capped at the Kerr limit.

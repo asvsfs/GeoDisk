@@ -132,7 +132,8 @@ export interface Players {
 }
 
 /**
- * World state at one tick. Per body: id u32, kind u8, flags u8, position
+ * World state at one tick. Per body: id u32, kind u8, flags u8 (bit 0
+ * anchored, bit 1 permanent), position
  * 3 x f32, velocity 3 x i16, mu f32, radius f32, spin f32, life u16.
  */
 export interface Snap {
@@ -217,7 +218,7 @@ function writeSnap(w: Writer, m: Snap): void {
   for (const b of m.bodies) {
     w.u32(b.id)
       .u8(BODY_KINDS.indexOf(b.kind))
-      .u8(b.fixed ? 1 : 0);
+      .u8((b.fixed ? 1 : 0) | (b.permanent ? 2 : 0));
     w.f32(b.x).f32(b.y).f32(b.z);
     w.i16(b.vx * VEL_SCALE)
       .i16(b.vy * VEL_SCALE)
@@ -363,6 +364,7 @@ function readSnap(r: Reader): Snap {
       spin,
       life: life === LIFE_FOREVER ? Infinity : life,
       fixed: (flags & 1) !== 0,
+      permanent: (flags & 2) !== 0,
     };
   }
   const ns = r.u16();

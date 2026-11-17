@@ -37,7 +37,10 @@ export interface Limits {
 
 /** World geometry and physical constants. */
 export interface WorldConfig {
-  /** Universe bounds; walls keep bodies and satellites inside. */
+  /**
+   * Universe bounds. Anything past them that gravity cannot bring back
+   * (see `escapeLimit`) leaves the universe.
+   */
   width: number;
   height: number;
   depth: number;
@@ -104,8 +107,11 @@ export interface PhysicsConfig {
   gasDensity: number;
   /** Bodies faster than this (world units / s) are tagged runaway. */
   runawaySpeed: number;
-  /** Fraction of kinetic energy kept when bouncing off the universe walls. */
-  wallBounce: number;
+  /**
+   * Bound objects may swing past the bounds and fall back; past this
+   * multiple of the half-size they are removed anyway.
+   */
+  escapeLimit: number;
   /** Barnes-Hut opening angle; lower is more accurate, higher is faster. */
   theta: number;
   /** Body count above which the tree solver replaces direct summation. */
@@ -128,16 +134,16 @@ export const DEFAULT_CONFIG: GameConfig = {
     maxPlayers: 16,
     launchCooldown: 0.35,
     spawnCooldown: 4,
-    minLaunchSpeed: 60,
-    maxLaunchSpeed: 720,
+    minLaunchSpeed: 40,
+    maxLaunchSpeed: 360,
     cpuShare: 0.5,
     minSnapHz: 15,
     maxUploadMbps: 0,
   },
   world: {
-    width: 8000,
-    height: 6000,
-    depth: 2000,
+    width: 12000,
+    height: 9000,
+    depth: 3000,
     c: 900,
     dt: 1 / 60,
     snapHz: 30,
@@ -169,7 +175,7 @@ export const DEFAULT_CONFIG: GameConfig = {
     fissionSpin: 1.5,
     gasDensity: 150,
     runawaySpeed: 480,
-    wallBounce: 0.9,
+    escapeLimit: 1.6,
     theta: 0.6,
     treeThreshold: 64,
   },

@@ -156,6 +156,9 @@ export class Effects {
         case EventKind.CRASH:
           this.burst(e.x, e.y, 14, 120, 0.5, 2.5, Tint.WHITE);
           break;
+        case EventKind.ESCAPE:
+          this.ring(e.x, e.y, e.size > 0 ? 160 : 60, 0.8, Tint.GREY);
+          break;
         case EventKind.SPAWN:
           this.ring(e.x, e.y, 90, 0.7, Tint.CYAN);
           break;

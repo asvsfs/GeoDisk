@@ -2,9 +2,9 @@
  * @fileoverview Default step pipeline and world factory.
  *
  * Order matters: bodies move first (building the field and hash), satellites
- * fly through that field, then contacts, stellar evolution and the walls run.
- * Nothing is ever spawned or deleted automatically: bodies only merge,
- * shatter, collapse or explode into pieces.
+ * fly through that field, then contacts, stellar evolution and escapes run.
+ * Nothing is ever spawned automatically. Bodies merge, shatter, collapse or
+ * explode into pieces, and leave the universe only by escaping.
  * Swap, add or reorder systems here to change the game's rules.
  */
 
@@ -14,7 +14,7 @@ import {BodyMotion, SatMotion} from './motion';
 import {GeodesicModel, type SatModel} from './sat_model';
 import {seedWorld} from './scenario';
 import {StellarEvolution} from './stars';
-import {Walls} from './walls';
+import {Escape} from './escape';
 import {World, type System} from './world';
 
 /** Builds the standard system list. */
@@ -26,7 +26,7 @@ export function defaultSystems(
     new SatMotion(model),
     new Collisions(),
     new StellarEvolution(),
-    new Walls(),
+    new Escape(),
   ];
 }
 

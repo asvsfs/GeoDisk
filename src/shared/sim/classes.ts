@@ -61,7 +61,8 @@ export function classify(
   b: Pick<
     Body,
     'kind' | 'mu' | 'radius' | 'spin' | 'vx' | 'vy' | 'vz' | 'fixed'
-  >,
+  > &
+    Partial<Pick<Body, 'permanent'>>,
   cfg: PhysicsConfig,
   c: number,
 ): BodyClass {
@@ -70,6 +71,8 @@ export function classify(
   const spinFrac = limit > 0 ? Math.min(1, Math.abs(b.spin) / limit) : 0;
   const id = classId(b, cfg, spinFrac);
   const tags: string[] = [];
+  if (b.permanent) tags.push('permanent');
+  else if (b.fixed) tags.push('anchored');
   const speed = Math.hypot(b.vx, b.vy, b.vz);
   if (!b.fixed && speed > cfg.runawaySpeed && b.kind !== 'rock') {
     tags.push(b.kind === 'star' ? 'runaway star' : 'runaway');
