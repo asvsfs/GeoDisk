@@ -387,3 +387,41 @@ test('previews launch from where the home body will be after the lead', () => {
     `${later[0].y - now[0].y}`,
   );
 });
+
+test('satellites feel full gravity near a black hole and fall in', () => {
+  // Regression: the old 1PN factor alpha^4 shrank gravity to under 1% inside
+  // ~2 mu / c^2, so satellites hovered around heavy holes instead of falling.
+  for (const v of [0, 250]) {
+    const w = world([new BodyMotion(), new SatMotion()]);
+    w.addBody({kind: 'hole', x: 0, y: 0, vx: v, mu: 6e7});
+    w.sats.push(sat(1, 1, 290, 0, v));
+    w.step();
+    const ax = (w.sats[0].vx - v) / DEFAULT_CONFIG.world.dt;
+    const newton = -6e7 / (290 * 290 + w.bodies[0].soft ** 2);
+    assert.ok(
+      ax < newton * 0.95 && ax > newton * 1.1,
+      `hole moving at ${v}: a=${ax}, newton=${newton}`,
+    );
+    for (let i = 0; i < 120 && w.sats.length > 0; i++) w.step();
+    assert.equal(w.sats.length, 0, `satellite crashed (hole speed ${v})`);
+  }
+});
+
+test('the Schwarzschild term only acts on moving satellites near compact bodies', () => {
+  for (const kind of ['hole', 'planet'] as const) {
+    const s = new DirectSolver(DEFAULT_CONFIG.world.c);
+    s.build([
+      {...newBodyLike(kind), x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0},
+    ] as Body[]);
+    const out = {ax: 0, ay: 0, az: 0};
+    s.addStrong(500, 0, 0, 0, 0, 0, out);
+    assert.equal(out.ax, 0, `${kind}: no correction at rest (L = 0)`);
+    s.addStrong(500, 0, 0, 0, 400, 0, out);
+    if (kind === 'hole') assert.ok(out.ax < 0, 'extra inward pull');
+    else assert.equal(out.ax, 0, 'ordinary matter has no strong-field term');
+  }
+});
+
+function newBodyLike(kind: 'hole' | 'planet'): Partial<Body> {
+  return {id: 1, kind, mu: 6e7, radius: 15, soft: 18, spin: 0, fixed: false};
+}
