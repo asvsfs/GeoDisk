@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: #070a10;
+  color: #f1f5f9;
+  font-family: var(--font-sans);
+  overflow: hidden;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom hairline range input for launch controls */
+input[type="range"].telemetry-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"].telemetry-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: #1e293b;
+}
+
+input[type="range"].telemetry-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #22d3ee;
+  border: 2px solid #070a10;
+  margin-top: -5px;
+}
+
+input[type="range"].telemetry-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: #1e293b;
+}
+
+input[type="range"].telemetry-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #22d3ee;
+  border: 2px solid #070a10;
+}

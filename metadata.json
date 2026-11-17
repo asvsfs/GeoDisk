@@ -1,0 +1,6 @@
+{
+  "name": "Geodesic — 2+1D Gravity Flight",
+  "description": "A 2D relativistic gravity rocket game powered by a uniform-grid 2+1D spacetime field solver, WebGPU compute shaders, and modular rocket physics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
