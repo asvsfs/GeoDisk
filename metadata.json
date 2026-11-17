@@ -1,6 +1,8 @@
 {
-  "name": "Geodesic — 2+1D Gravity Flight",
-  "description": "A 2D relativistic gravity rocket game powered by a uniform-grid 2+1D spacetime field solver, WebGPU compute shaders, and modular rocket physics.",
+  "name": "GeoDisk \u2014 Multiplayer Gravity Sandbox",
+  "description": "A shared relativistic universe: launch satellites from your planet, collide worlds and trigger supernovae with other players over WebTransport.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

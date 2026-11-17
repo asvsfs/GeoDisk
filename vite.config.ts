@@ -34,6 +34,9 @@ export default defineConfig(() => {
       },
     },
     server: {
+      // The game server publishes its WebTransport port and certificate hash
+      // here; game traffic itself goes straight to it over WebTransport.
+      proxy: {'/wt-info': `http://localhost:${process.env.HTTP_PORT ?? 8080}`},
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
